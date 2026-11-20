@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { api, fmtDate, MONTHS, download } from "./api.js";
+import { api, fmtDate, MONTHS, download, MEMBERSHIP, membershipLabel } from "./api.js";
 import { Modal } from "./Modal.jsx";
 
 const TABS = [
@@ -112,14 +112,14 @@ function Members({ me }) {
       </div>
       {err && <div className="error">{err}</div>}
       <div className="table-wrap"><table>
-        <thead><tr><th>Navn</th><th>Kontakt</th><th>Tilknytning</th><th>Status</th><th>Kontingent</th><th></th></tr></thead>
+        <thead><tr><th>Navn</th><th>Kontakt</th><th>Medlemstype</th><th>Status</th><th>Kontingent</th><th></th></tr></thead>
         <tbody>
           {!shown.length && <tr><td colSpan={6} className="empty">Ingen medlemmer i denne visning.</td></tr>}
           {shown.map((m) => (
             <tr key={m.id}>
               <td><b>{m.name || "—"}</b>{m.role === "board" && <> <span className="pill board">Bestyrelse</span></>}<div className="muted small">Indmeldt {fmtDate(m.created_at)}</div></td>
               <td>{m.email}<div className="muted small">{[m.phone, [m.postal_code, m.city].filter(Boolean).join(" ")].filter(Boolean).join(" · ")}</div></td>
-              <td>{m.affiliation || <span className="muted">—</span>}</td>
+              <td>{membershipLabel(m.membership_type) || <span className="muted">Ikke valgt</span>}{m.affiliation && <div className="muted small">{m.affiliation}</div>}</td>
               <td>
                 <span className={"pill " + m.status}>{{ pending: "Afventer", active: "Aktiv", ended: "Udmeldt" }[m.status]}</span>
                 {m.deletion_requested_at && <div className="small" style={{ color: "var(--terra)" }}>Ønsker sletning</div>}
@@ -154,7 +154,7 @@ function Members({ me }) {
   );
 }
 function AddMember({ onSave }) {
-  const [f, setF] = useState({ name: "", email: "", phone: "", postal_code: "", city: "", affiliation: "", role: "member", fee_paid_year: "" });
+  const [f, setF] = useState({ name: "", email: "", phone: "", postal_code: "", city: "", affiliation: "", membership_type: "fuldt", role: "member", fee_paid_year: "" });
   const [err, setErr] = useState(""); const [busy, setBusy] = useState(false);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   return (
@@ -163,6 +163,7 @@ function AddMember({ onSave }) {
         <label>Navn<input required value={f.name} onChange={set("name")} /></label>
         <label>E-mail<input required type="email" value={f.email} onChange={set("email")} /></label>
         <label>Rolle<select value={f.role} onChange={set("role")}><option value="member">Medlem</option><option value="board">Bestyrelse</option></select></label>
+        <label>Medlemstype<select value={f.membership_type || ""} onChange={set("membership_type")}><option value="">Ikke valgt</option>{MEMBERSHIP.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
         <label>Telefon<input value={f.phone} onChange={set("phone")} /></label>
         <label>Postnr.<input value={f.postal_code} onChange={set("postal_code")} /></label>
         <label>By<input value={f.city} onChange={set("city")} /></label>
@@ -196,12 +197,13 @@ function MemberEdit({ m, me, onSave, onDelete }) {
   const [f, setF] = useState(m);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value });
   return (
-    <form className="stack" onSubmit={(e) => { e.preventDefault(); const { name, phone, postal_code, city, affiliation, role, status, fee_paid_year, notes } = f; onSave({ name, phone, postal_code, city, affiliation, role, status, fee_paid_year: fee_paid_year ? Number(fee_paid_year) : null, notes }); }}>
+    <form className="stack" onSubmit={(e) => { e.preventDefault(); const { name, phone, postal_code, city, affiliation, membership_type, role, status, fee_paid_year, notes } = f; onSave({ name, phone, postal_code, city, affiliation, membership_type, role, status, fee_paid_year: fee_paid_year ? Number(fee_paid_year) : null, notes }); }}>
       <div className="form-grid">
         <label>Navn<input value={f.name || ""} onChange={set("name")} /></label>
         <label>Telefon<input value={f.phone || ""} onChange={set("phone")} /></label>
         <label>Postnr.<input value={f.postal_code || ""} onChange={set("postal_code")} /></label>
         <label>By<input value={f.city || ""} onChange={set("city")} /></label>
+<label>Medlemstype<select value={f.membership_type || ""} onChange={set("membership_type")}><option value="">Ikke valgt</option>{MEMBERSHIP.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
         <label>Status<select value={f.status} onChange={set("status")}><option value="pending">Afventer</option><option value="active">Aktiv</option><option value="ended">Udmeldt</option></select></label>
         <label>Rolle<select value={f.role} onChange={set("role")} disabled={m.id === me.id}><option value="member">Medlem</option><option value="board">Bestyrelse</option></select></label>
         <label>Kontingent betalt for år<input type="number" value={f.fee_paid_year || ""} onChange={set("fee_paid_year")} /></label>

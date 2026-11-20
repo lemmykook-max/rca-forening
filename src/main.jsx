@@ -4,7 +4,7 @@ import {
   getUser, login, logout, signup, handleAuthCallback, acceptInvite,
   requestPasswordRecovery, recoverPassword, onAuthChange,
 } from "@netlify/identity";
-import { api, fmtDate, download } from "./api.js";
+import { api, fmtDate, download, MEMBERSHIP } from "./api.js";
 import Board from "./Board.jsx";
 import { Modal } from "./Modal.jsx";
 import "./styles.css";
@@ -303,6 +303,18 @@ function CallbackForm({ cb, done }) {
 /* ---------------- member ---------------- */
 function ProfileFields({ f, set }) {
   return (
+    <>
+    <fieldset className="card" style={{ boxShadow: "none", margin: 0 }}>
+      <legend className="small" style={{ color: "var(--muted)", padding: "0 6px" }}>Medlemstype · 0 kr. indtil videre</legend>
+      <div className="stack" style={{ gap: 10 }}>
+        {MEMBERSHIP.map(([v, label, desc]) => (
+          <label key={v} className="check">
+            <input type="radio" name="membership_type" value={v} required checked={f.membership_type === v} onChange={set("membership_type")} />
+            <b>{label}</b><br /><span className="muted small">{desc}</span>
+          </label>
+        ))}
+      </div>
+    </fieldset>
     <div className="form-grid">
       <label>Fulde navn<input required value={f.name || ""} onChange={set("name")} /></label>
       <label>Telefon<input required type="tel" value={f.phone || ""} onChange={set("phone")} autoComplete="tel" /></label>
@@ -315,6 +327,7 @@ function ProfileFields({ f, set }) {
         </select>
       </label>
     </div>
+    </>
   );
 }
 
@@ -356,13 +369,15 @@ function MyMembership({ member, reload }) {
     try { await api("me", { method: "POST", body: f }); await reload(); setMsg("Gemt."); } catch (e2) { setErr(e2.message); }
   };
   const year = new Date().getFullYear();
+  const typeText = (MEMBERSHIP.find(([v]) => v === member.membership_type) || [])[1];
   const statusText = { pending: "Afventer godkendelse", active: "Aktivt medlem", ended: "Udmeldt" }[member.status] || member.status;
   return (
     <>
       <h1>Mit medlemskab</h1>
       {member.status === "pending" && <Pending />}
+      {!member.membership_type && <div className="notice">Vælg venligst din medlemstype nedenfor og gem.</div>}
       <div className="grid" style={{ marginBottom: 22 }}>
-        <div className="card"><p className="muted small">Status</p><p className="stat" style={{ fontSize: "1.5rem" }}>{statusText}</p>{member.role === "board" && <span className="pill board">Bestyrelse</span>}</div>
+        <div className="card"><p className="muted small">Status</p><p className="stat" style={{ fontSize: "1.5rem" }}>{statusText}</p>{typeText && <p className="muted small" style={{ marginTop: 8 }}>{typeText}</p>}{member.role === "board" && <span className="pill board">Bestyrelse</span>}</div>
         <div className="card"><p className="muted small">Kontingent {year}</p><p className="stat" style={{ fontSize: "1.5rem" }}>{member.fee_paid_year >= year ? "Betalt ✓" : "Ikke registreret"}</p></div>
         <div className="card"><p className="muted small">Medlem siden</p><p className="stat" style={{ fontSize: "1.5rem" }}>{fmtDate(member.created_at)}</p></div>
       </div>

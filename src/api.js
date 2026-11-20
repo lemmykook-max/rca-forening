@@ -30,3 +30,10 @@ export function download(path, filename) {
   a.click();
   a.remove();
 }
+
+export const MEMBERSHIP = [
+  ["fuldt", "Fuldt medlemskab", "Fulde medlemsrettigheder, herunder stemmeret"],
+  ["studie", "Studie-, pensionist- og børnemedlemskab", "For studerende på SU, pensionister og børn til og med 17 år. Stemmeret fra 18 år"],
+  ["stoette", "Støttemedlemskab", "For familie, venner, fagfolk og andre. Taleret, ikke stemmeret"],
+];
+export const membershipLabel = (v) => ({ fuldt: "Fuldt", studie: "Studie/pension./barn", stoette: "Støtte" }[v] || "");

@@ -16,6 +16,9 @@ async function q<T = any>(text: string, params: unknown[] = []): Promise<T[]> {
 const json = (data: unknown, status = 200) => Response.json(data, { status });
 const err = (msg: string, status = 400) => json({ error: msg }, status);
 
+const MEMBERSHIP_TYPES = ["fuldt", "studie", "stoette"];
+const memberType = (v: unknown) => (MEMBERSHIP_TYPES.includes(String(v)) ? String(v) : null);
+
 const boardEmails = () =>
   (process.env.BOARD_EMAILS || "")
     .split(",")
@@ -128,7 +131,7 @@ export default async (req: Request, _context: Context) => {
         return json(await q("SELECT id, title, summary, body, tags, source_url, created_at FROM articles WHERE published AND visibility = 'public' ORDER BY created_at DESC"));
       if (b === "config")
         return json({
-          feeText: process.env.FEE_TEXT || "Kontingentet fastsættes af generalforsamlingen. Bestyrelsen sender betalingsoplysninger, når din indmeldelse er godkendt.",
+          feeText: process.env.FEE_TEXT || "Kontingentet er 0 kr. indtil videre, jf. beslutningen på den stiftende generalforsamling. Frivillige donationer er velkomne, når foreningen har fået en bankkonto.",
           contactEmail: process.env.CONTACT_EMAIL || "",
         });
       return err("Ikke fundet", 404);
@@ -146,14 +149,15 @@ export default async (req: Request, _context: Context) => {
         if (!member?.privacy_accepted_at && !body.privacy_accepted) return err("Du skal acceptere privatlivspolitikken");
         for (const [k, label] of [["name", "Navn"], ["phone", "Telefon"], ["postal_code", "Postnummer"], ["city", "By"]])
           if (!String(body[k] ?? "").trim()) return err(`${label} skal udfyldes`);
-        const fields = [body.name || "", body.phone || null, body.postal_code || null, body.city || null, body.affiliation || null];
+        if (!memberType(body.membership_type)) return err("Vælg en medlemstype");
+        const fields = [body.name || "", body.phone || null, body.postal_code || null, body.city || null, body.affiliation || null, memberType(body.membership_type)];
         let row;
         if (member) {
-          [row] = await q("UPDATE members SET name=$1, phone=$2, postal_code=$3, city=$4, affiliation=$5, privacy_accepted_at=COALESCE(privacy_accepted_at, NOW()), updated_at=NOW() WHERE id=$6 RETURNING *", [...fields, member.id]);
+          [row] = await q("UPDATE members SET name=$1, phone=$2, postal_code=$3, city=$4, affiliation=$5, membership_type=$6, privacy_accepted_at=COALESCE(privacy_accepted_at, NOW()), updated_at=NOW() WHERE id=$7 RETURNING *", [...fields, member.id]);
         } else {
           const isBoard = boardEmails().includes(actor.toLowerCase());
           [row] = await q(
-            "INSERT INTO members (identity_id, email, name, phone, postal_code, city, affiliation, privacy_accepted_at, role, status) VALUES ($1,$2,$3,$4,$5,$6,$7,NOW(),$8,$9) RETURNING *",
+            "INSERT INTO members (identity_id, email, name, phone, postal_code, city, affiliation, membership_type, privacy_accepted_at, role, status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),$9,$10) RETURNING *",
             [user.id, actor.toLowerCase(), ...fields, isBoard ? "board" : "member", isBoard ? "active" : "pending"],
           );
           await audit(actor, "member:signup", "");
@@ -232,23 +236,24 @@ export default async (req: Request, _context: Context) => {
           const [exists] = await q("SELECT id FROM members WHERE lower(email) = $1", [email]);
           if (exists) return err("Der findes allerede et medlem med den e-mail");
           const [row] = await q(
-            "INSERT INTO members (email, name, phone, postal_code, city, affiliation, role, status, fee_paid_year, notes) VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8,$9) RETURNING *",
+            "INSERT INTO members (email, name, phone, postal_code, city, affiliation, role, status, fee_paid_year, notes, membership_type) VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8,$9,$10) RETURNING *",
             [email, String(body.name).trim(), clean(body.phone) ?? null, clean(body.postal_code) ?? null, clean(body.city) ?? null, clean(body.affiliation) ?? null,
-             body.role === "board" ? "board" : "member", body.fee_paid_year ? Number(body.fee_paid_year) : null, clean(body.notes) ?? null],
+             body.role === "board" ? "board" : "member", body.fee_paid_year ? Number(body.fee_paid_year) : null, clean(body.notes) ?? null, memberType(body.membership_type)],
           );
           await audit(actor, "member:create", `${row.id} ${body.role === "board" ? "board" : "member"}`);
           return json(row, 201);
         }
         if (c === "export.csv") {
-          const rows = await q<any>("SELECT name, email, phone, postal_code, city, affiliation, role, status, fee_paid_year, created_at FROM members WHERE status <> 'ended' ORDER BY name");
-          const header = ["navn", "email", "telefon", "postnr", "by", "tilknytning", "rolle", "status", "kontingent_betalt_aar", "indmeldt"];
+          const rows = await q<any>("SELECT name, email, phone, postal_code, city, affiliation, CASE membership_type WHEN 'fuldt' THEN 'Fuldt' WHEN 'studie' THEN 'Studie/pensionist/barn' WHEN 'stoette' THEN 'Støtte' END AS membership_type, CASE role WHEN 'board' THEN 'Bestyrelse' ELSE 'Medlem' END AS role, CASE status WHEN 'active' THEN 'Aktiv' WHEN 'pending' THEN 'Afventer' ELSE 'Udmeldt' END AS status, fee_paid_year, to_char(created_at AT TIME ZONE 'Europe/Copenhagen', 'YYYY-MM-DD') AS created_at FROM members WHERE status <> 'ended' ORDER BY name");
+          const header = ["navn", "email", "telefon", "postnr", "by", "tilknytning", "medlemstype", "rolle", "status", "kontingent_betalt_aar", "indmeldt"];
           const csv = "﻿" + [header.join(";"), ...rows.map((r) => Object.values(r).map(csvEscape).join(";"))].join("\n");
           await audit(actor, "members:export", String(rows.length));
           return new Response(csv, { headers: { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": 'attachment; filename="rca-medlemmer.csv"' } });
         }
         if (c && req.method === "PATCH") {
           const body = await req.json();
-          const allowed = ["name", "phone", "postal_code", "city", "affiliation", "role", "status", "fee_paid_year", "notes"];
+          const allowed = ["name", "phone", "postal_code", "city", "affiliation", "membership_type", "role", "status", "fee_paid_year", "notes"];
+          if ("membership_type" in body) body.membership_type = memberType(body.membership_type);
           const cols = allowed.filter((k) => k in body);
           if (Number(c) === member.id && "role" in body && body.role !== "board") return err("Du kan ikke fjerne din egen bestyrelsesrolle");
           const [row] = await q(`UPDATE members SET ${cols.map((k, i) => `${k}=$${i + 1}`).join(", ")}, updated_at=NOW() WHERE id=$${cols.length + 1} RETURNING *`, [...cols.map((k) => clean(body[k])), Number(c)]);
