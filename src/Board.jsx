@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { api, fmtDate, MONTHS, download, MEMBERSHIP, membershipLabel } from "./api.js";
 import { Modal } from "./Modal.jsx";
+import { FolderView, folderOptions } from "./Folders.jsx";
 
 const TABS = [
   ["overblik", "Overblik"], ["medlemmer", "Medlemmer"], ["arrangementer", "Arrangementer"],
@@ -20,7 +21,7 @@ export default function Board({ me }) {
       {tab === "overblik" && <Dashboard pick={pick} />}
       {tab === "medlemmer" && <Members me={me} />}
       {tab === "arrangementer" && <Crud {...EVENTS} />}
-      {tab === "dokumenter" && <Crud {...DOCS} />}
+      {tab === "dokumenter" && <Documents />}
       {tab === "opgaver" && <Crud {...TASKS} />}
       {tab === "aarshjul" && <YearWheel />}
       {tab === "viden" && <Crud {...ARTICLES} />}
@@ -42,7 +43,6 @@ function Dashboard({ pick }) {
         <Stat n={c.active} label="Aktive medlemmer" onClick={() => pick("medlemmer")} />
         <Stat n={c.pending} label="Afventer godkendelse" warn={c.pending > 0} onClick={() => pick("medlemmer")} />
         <Stat n={c.unpaid} label={`Mangler kontingent ${new Date().getFullYear()}`} warn={c.unpaid > 0} onClick={() => pick("medlemmer")} />
-        {c.deletion > 0 && <Stat n={c.deletion} label="Anmodninger om sletning (GDPR)" warn onClick={() => pick("medlemmer")} />}
       </div>
       <div className="grid section">
         <div className="card">
@@ -79,19 +79,25 @@ function Members({ me }) {
   const [rows, setRows] = useState(null); const [filter, setFilter] = useState("alle"); const [search, setSearch] = useState("");
   const [edit, setEdit] = useState(null); const [err, setErr] = useState("");
   const [adding, setAdding] = useState(false); const [added, setAdded] = useState(null);
+  const [inYear, setInYear] = useState("");
   const year = new Date().getFullYear();
   const load = () => api("admin/members").then(setRows).catch((e) => setErr(e.message));
   useEffect(() => { load(); }, []);
   const patch = async (m, body) => { setErr(""); try { await api(`admin/members/${m.id}`, { method: "PATCH", body }); load(); } catch (e) { setErr(e.message); } };
   const remove = async (m) => {
-    if (!confirm(`Slet ${m.name || m.email} permanent? Dette kan ikke fortrydes.`)) return;
+    if (!confirm(`Slet indmeldelsen fra ${m.name || m.email}? Dette kan ikke fortrydes.`)) return;
     try { await api(`admin/members/${m.id}`, { method: "DELETE" }); setEdit(null); load(); } catch (e) { setErr(e.message); }
   };
   if (!rows) return <p className="muted">{err || "Indlæser …"}</p>;
+  const memberInYear = (m, y) => m.joined_at && new Date(m.joined_at) < new Date(y + 1, 0, 1) && (!m.ended_at || new Date(m.ended_at) >= new Date(y, 0, 1));
+  const firstYear = Math.min(year, ...rows.filter((m) => m.joined_at).map((m) => new Date(m.joined_at).getFullYear()));
+  const years = Array.from({ length: year - firstYear + 1 }, (_, i) => year - i);
   const shown = rows.filter((m) => {
+    if (inYear) { if (!memberInYear(m, Number(inYear))) return false; }
+    else if (filter === "alle" && m.status === "ended") return false;
     if (filter === "afventer" && m.status !== "pending") return false;
+    if (filter === "udmeldte" && m.status !== "ended") return false;
     if (filter === "ubetalt" && !(m.status === "active" && !(m.fee_paid_year >= year))) return false;
-    if (filter === "sletning" && !m.deletion_requested_at) return false;
     if (filter === "bestyrelse" && m.role !== "board") return false;
     const s = search.toLowerCase();
     return !s || (m.name || "").toLowerCase().includes(s) || m.email.includes(s);
@@ -100,29 +106,33 @@ function Members({ me }) {
     <>
       <div className="row" style={{ marginBottom: 14, justifyContent: "space-between" }}>
         <div className="row">
-          {["alle", "afventer", "ubetalt", "sletning", "bestyrelse"].map((f) => (
-            <button key={f} className={"btn small " + (filter === f ? "" : "ghost")} onClick={() => setFilter(f)}>{f[0].toUpperCase() + f.slice(1)}</button>
+          {[["alle", "Aktuelle"], ["afventer", "Afventer"], ["ubetalt", "Ubetalt"], ["udmeldte", "Udmeldte"], ["bestyrelse", "Bestyrelse"]].map(([f, l]) => (
+            <button key={f} className={"btn small " + (filter === f && !inYear ? "" : "ghost")} onClick={() => { setInYear(""); setFilter(f); }}>{l}</button>
           ))}
+          <select value={inYear} onChange={(e) => { setInYear(e.target.value); setFilter("alle"); }} style={{ width: "auto" }} title="Alle, der var medlem på et tidspunkt i året – også udmeldte">
+            <option value="">Medlemmer i år …</option>
+            {years.map((y) => <option key={y} value={y}>Medlemmer i {y}</option>)}
+          </select>
         </div>
         <div className="row">
           <input placeholder="Søg navn eller e-mail" value={search} onChange={(e) => setSearch(e.target.value)} style={{ width: 220 }} />
-          <button className="btn ghost small" onClick={() => download("admin/members/export.csv", "rca-medlemmer.csv")}>Eksportér CSV</button>
+          <button className="btn ghost small" onClick={() => inYear ? download(`admin/members/export.csv?year=${inYear}`, `rca-medlemmer-${inYear}.csv`) : download("admin/members/export.csv", "rca-medlemmer-aktuelle.csv")}>Eksportér CSV{inYear ? ` (${inYear})` : ""}</button>
           <button className="btn small" onClick={() => { setAdded(null); setAdding(true); }}>+ Tilføj medlem</button>
         </div>
       </div>
       {err && <div className="error">{err}</div>}
       <div className="table-wrap"><table>
-        <thead><tr><th>Navn</th><th>Kontakt</th><th>Medlemstype</th><th>Status</th><th>Kontingent</th><th></th></tr></thead>
+        <thead><tr><th>Nr.</th><th>Navn</th><th>Kontakt</th><th>Medlemstype</th><th>Status</th><th>Kontingent</th><th></th></tr></thead>
         <tbody>
-          {!shown.length && <tr><td colSpan={6} className="empty">Ingen medlemmer i denne visning.</td></tr>}
+          {!shown.length && <tr><td colSpan={7} className="empty">Ingen medlemmer i denne visning.</td></tr>}
           {shown.map((m) => (
             <tr key={m.id}>
-              <td><b>{m.name || "—"}</b>{m.role === "board" && <> <span className="pill board">Bestyrelse</span></>}<div className="muted small">Indmeldt {fmtDate(m.created_at)}</div></td>
+              <td className="muted">{m.member_no}</td>
+              <td><b>{m.name || "—"}</b>{m.role === "board" && <> <span className="pill board">Bestyrelse</span></>}<div className="muted small">{m.joined_at ? `Medlem fra ${fmtDate(m.joined_at)}` : `Indmeldt ${fmtDate(m.created_at)}`}{m.ended_at ? ` til ${fmtDate(m.ended_at)}` : ""}</div></td>
               <td>{m.email}<div className="muted small">{[m.phone, [m.postal_code, m.city].filter(Boolean).join(" ")].filter(Boolean).join(" · ")}</div></td>
               <td>{membershipLabel(m.membership_type) || <span className="muted">Ikke valgt</span>}{m.affiliation && <div className="muted small">{m.affiliation}</div>}</td>
               <td>
                 <span className={"pill " + m.status}>{{ pending: "Afventer", active: "Aktiv", ended: "Udmeldt" }[m.status]}</span>
-                {m.deletion_requested_at && <div className="small" style={{ color: "var(--terra)" }}>Ønsker sletning</div>}
               </td>
               <td>{m.fee_paid_year >= year ? <span className="pill">Betalt {m.fee_paid_year}</span> : <button className="btn small ghost" onClick={() => patch(m, { fee_paid_year: year })}>Markér betalt {year}</button>}</td>
               <td className="row">
@@ -209,10 +219,10 @@ function MemberEdit({ m, me, onSave, onDelete }) {
         <label>Kontingent betalt for år<input type="number" value={f.fee_paid_year || ""} onChange={set("fee_paid_year")} /></label>
       </div>
       <label>Interne noter (kun bestyrelsen – undgå følsomme oplysninger)<textarea value={f.notes || ""} onChange={set("notes")} /></label>
-      <p className="muted small">Privatlivspolitik accepteret: {fmtDate(m.privacy_accepted_at, true) || "—"}{m.deletion_requested_at ? ` · Sletning anmodet ${fmtDate(m.deletion_requested_at)}` : ""}</p>
+      <p className="muted small">Privatlivspolitik accepteret: {fmtDate(m.privacy_accepted_at, true) || "—"} · Medlemsnr. {m.member_no}{m.joined_at ? ` · medlem fra ${fmtDate(m.joined_at)}` : ""}{m.ended_at ? ` til ${fmtDate(m.ended_at)}` : ""}</p>
       <div className="row" style={{ justifyContent: "space-between" }}>
         <button className="btn">Gem</button>
-        {m.id !== me.id && <button type="button" className="btn danger" onClick={onDelete}>Slet permanent</button>}
+        {m.id !== me.id && !m.joined_at && <button type="button" className="btn danger" onClick={onDelete}>Slet indmeldelse</button>}
       </div>
     </form>
   );
@@ -229,17 +239,6 @@ const EVENTS = {
   ],
   cols: [["title", "Titel"], ["starts_at", "Tidspunkt", (v) => fmtDate(v, true)], ["location", "Sted"], ["visibility", "Synlighed", (v) => (v === "public" ? "Offentligt" : "Medlemmer")]],
   extra: (row) => <Signups id={row.id} />,
-};
-const DOCS = {
-  resource: "documents", title: "Dokumenter", newLabel: "Nyt dokument",
-  intro: "Link til referater, vedtægter m.m. i Google Drive-mappen “RessourceCenter for Adopterede RCA”, eller skriv teksten direkte.",
-  fields: [
-    { k: "title", l: "Titel", req: true }, { k: "doc_date", l: "Dato", type: "date" },
-    { k: "category", l: "Type", type: "select", opts: [["referat", "Referat"], ["vedtægter", "Vedtægter"], ["regnskab", "Regnskab"], ["politik", "Politik"], ["andet", "Andet"]], def: "referat" },
-    { k: "visibility", l: "Hvem kan se det", type: "select", opts: [["board", "Kun bestyrelsen"], ["members", "Alle medlemmer"]], def: "board" },
-    { k: "url", l: "Link (fx Google Drive)", wide: true }, { k: "body", l: "Tekst / resumé", type: "textarea", wide: true },
-  ],
-  cols: [["title", "Titel", (v, r) => (r.url ? <a href={r.url} target="_blank" rel="noreferrer">{v}</a> : v)], ["category", "Type"], ["doc_date", "Dato", (v) => fmtDate(v)], ["visibility", "Synlighed", (v) => (v === "members" ? "Medlemmer" : "Bestyrelsen")]],
 };
 const TASKS = {
   resource: "tasks", title: "Opgaver", newLabel: "Ny opgave",
@@ -424,6 +423,79 @@ function AuditLog() {
         <thead><tr><th>Tidspunkt</th><th>Hvem</th><th>Handling</th><th>Detalje</th></tr></thead>
         <tbody>{rows.map((r) => <tr key={r.id}><td>{fmtDate(r.created_at, true)}</td><td>{r.actor}</td><td>{r.action}</td><td className="muted">{r.detail}</td></tr>)}</tbody>
       </table></div>
+    </>
+  );
+}
+
+/* ---------- documents with folders ---------- */
+function Documents() {
+  const [folders, setFolders] = useState(null); const [docs, setDocs] = useState([]);
+  const [current, setCurrent] = useState(null);
+  const [editDoc, setEditDoc] = useState(null); const [editFolder, setEditFolder] = useState(null);
+  const [err, setErr] = useState("");
+  const load = async () => {
+    try { const [f, d] = await Promise.all([api("admin/folders"), api("admin/documents")]); setFolders(f); setDocs(d); }
+    catch (e) { setErr(e.message); }
+  };
+  useEffect(() => { load(); }, []);
+  if (!folders) return <p className="muted">{err || "Indlæser …"}</p>;
+  const curFolder = folders.find((f) => f.id === current);
+  const folderSelect = (exclude) => ({ k: "folder_id", l: "Mappe", type: "select", opts: [["", "📁 Dokumenter (øverste niveau)"], ...folderOptions(folders, exclude).map(([id, n]) => [String(id), n])] });
+  const saveDoc = async (body) => {
+    setErr(""); body.folder_id = body.folder_id ? Number(body.folder_id) : null;
+    try {
+      if (editDoc.id) await api(`admin/documents/${editDoc.id}`, { method: "PATCH", body });
+      else await api("admin/documents", { method: "POST", body });
+      setEditDoc(null); load();
+    } catch (e) { setErr(e.message); }
+  };
+  const saveFolder = async (body) => {
+    setErr(""); body.parent_id = body.folder_id ? Number(body.folder_id) : null; delete body.folder_id;
+    try {
+      if (editFolder.id) await api(`admin/folders/${editFolder.id}`, { method: "PATCH", body });
+      else await api("admin/folders", { method: "POST", body });
+      setEditFolder(null); load();
+    } catch (e) { setErr(e.message); }
+  };
+  const del = async (kind, row) => {
+    if (!confirm(`Slet “${row.title || row.name}”?`)) return;
+    setErr("");
+    try { await api(`admin/${kind}/${row.id}`, { method: "DELETE" }); setEditDoc(null); setEditFolder(null); load(); }
+    catch (e) { setErr(e.message); }
+  };
+  const vis = (def) => ({ k: "visibility", l: "Hvem kan se det", type: "select", opts: [["board", "Kun bestyrelsen"], ["members", "Alle medlemmer"]], def });
+  return (
+    <>
+      <div className="row" style={{ justifyContent: "space-between", marginBottom: 14 }}>
+        <p className="muted" style={{ margin: 0 }}>Link til filer i Google Drive-mappen “RessourceCenter for Adopterede RCA”, eller skriv teksten direkte. Medlemmer ser kun mapper og dokumenter, der er sat til “Alle medlemmer”.</p>
+        <div className="row">
+          <button className="btn ghost" onClick={() => setEditFolder({ folder_id: current ? String(current) : "", visibility: curFolder?.visibility || "board" })}>+ Ny mappe</button>
+          <button className="btn" onClick={() => setEditDoc({ folder_id: current ? String(current) : "", category: "referat", visibility: curFolder?.visibility || "board" })}>+ Nyt dokument</button>
+        </div>
+      </div>
+      {err && <div className="error" style={{ marginBottom: 12 }}>{err}</div>}
+      <FolderView folders={folders} docs={docs} current={current} setCurrent={setCurrent} editable
+        onOpenFolder={(f) => setEditFolder({ ...f, folder_id: f.parent_id ? String(f.parent_id) : "" })}
+        onOpenDoc={(d) => setEditDoc({ ...d, folder_id: d.folder_id ? String(d.folder_id) : "" })} />
+      {editFolder && (
+        <Modal onClose={() => setEditFolder(null)}>
+          <h2>{editFolder.id ? editFolder.name : "Ny mappe"}</h2>
+          <CrudForm row={editFolder} onSave={saveFolder} onDelete={editFolder.id ? () => del("folders", editFolder) : null}
+            fields={[{ k: "name", l: "Navn", req: true }, { ...folderSelect(editFolder.id), l: "Ligger i" }, vis("board")]} />
+        </Modal>
+      )}
+      {editDoc && (
+        <Modal onClose={() => setEditDoc(null)}>
+          <h2>{editDoc.id ? editDoc.title : "Nyt dokument"}</h2>
+          <CrudForm row={editDoc} onSave={saveDoc} onDelete={editDoc.id ? () => del("documents", editDoc) : null}
+            fields={[
+              { k: "title", l: "Titel", req: true }, { k: "doc_date", l: "Dato", type: "date" },
+              { k: "category", l: "Type", type: "select", opts: [["referat", "Referat"], ["vedtægter", "Vedtægter"], ["regnskab", "Regnskab"], ["politik", "Politik"], ["andet", "Andet"]], def: "referat" },
+              vis("board"), folderSelect(null),
+              { k: "url", l: "Link (fx Google Drive)", wide: true }, { k: "body", l: "Tekst / resumé", type: "textarea", wide: true },
+            ]} />
+        </Modal>
+      )}
     </>
   );
 }

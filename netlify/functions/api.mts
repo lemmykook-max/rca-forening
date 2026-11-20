@@ -54,7 +54,8 @@ async function currentMember() {
 // Whitelisted columns for simple CRUD tables (board only)
 const TABLES: Record<string, { cols: string[]; order: string }> = {
   events: { cols: ["title", "description", "starts_at", "location", "online_url", "capacity", "visibility"], order: "starts_at DESC" },
-  documents: { cols: ["title", "category", "url", "body", "visibility", "doc_date"], order: "COALESCE(doc_date, created_at::date) DESC, id DESC" },
+  folders: { cols: ["name", "parent_id", "visibility"], order: "name" },
+  documents: { cols: ["title", "category", "url", "body", "visibility", "doc_date", "folder_id"], order: "COALESCE(doc_date, created_at::date) DESC, id DESC" },
   tasks: { cols: ["title", "owner", "due_date", "status", "notes"], order: "status = 'done', due_date NULLS LAST, id" },
   "year-wheel": { cols: ["month", "day", "title", "description", "owner"], order: "month, day NULLS LAST, id" },
   articles: { cols: ["title", "summary", "body", "tags", "source_url", "visibility", "published"], order: "created_at DESC" },
@@ -90,7 +91,12 @@ async function crud(req: Request, key: string, id: string | undefined, actor: st
     return json(rows[0] || null);
   }
   if (req.method === "DELETE" && id) {
-    await q(`DELETE FROM ${table} WHERE id = $1`, [Number(id)]);
+    try {
+      await q(`DELETE FROM ${table} WHERE id = $1`, [Number(id)]);
+    } catch (e: any) {
+      if (e?.code === "23503") return err(table === "folders" ? "Mappen er ikke tom. Flyt eller slet indholdet først." : "Kan ikke slettes, fordi andet afhænger af den.");
+      throw e;
+    }
     await audit(actor, `delete:${table}`, id);
     return json({ ok: true });
   }
@@ -157,7 +163,7 @@ export default async (req: Request, _context: Context) => {
         } else {
           const isBoard = boardEmails().includes(actor.toLowerCase());
           [row] = await q(
-            "INSERT INTO members (identity_id, email, name, phone, postal_code, city, affiliation, membership_type, privacy_accepted_at, role, status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),$9,$10) RETURNING *",
+            "INSERT INTO members (identity_id, email, name, phone, postal_code, city, affiliation, membership_type, privacy_accepted_at, role, status, joined_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),$9,$10, CASE WHEN $10 = 'active' THEN NOW() END) RETURNING *",
             [user.id, actor.toLowerCase(), ...fields, isBoard ? "board" : "member", isBoard ? "active" : "pending"],
           );
           await audit(actor, "member:signup", "");
@@ -171,9 +177,10 @@ export default async (req: Request, _context: Context) => {
           headers: { "Content-Type": "application/json", "Content-Disposition": 'attachment; filename="mine-data-rca.json"' },
         });
       }
-      if (b === "delete-request" && member && req.method === "POST") {
-        await q("UPDATE members SET deletion_requested_at = NOW() WHERE id = $1", [member.id]);
-        await audit(actor, "member:deletion-request", String(member.id));
+      if (b === "resign" && member && req.method === "POST") {
+        if (member.role === "board") return err("Bestyrelsesmedlemmer skal først udtræde af bestyrelsen");
+        await q("UPDATE members SET status = 'ended', ended_at = COALESCE(ended_at, NOW()), updated_at = NOW() WHERE id = $1", [member.id]);
+        await audit(actor, "member:resign", String(member.id));
         return json({ ok: true });
       }
       return err("Ikke fundet", 404);
@@ -205,7 +212,10 @@ export default async (req: Request, _context: Context) => {
     if (a === "articles" && isActive)
       return json(await q("SELECT * FROM articles WHERE published ORDER BY created_at DESC"));
     if (a === "documents" && isActive)
-      return json(await q("SELECT id, title, category, url, body, doc_date, created_at FROM documents WHERE visibility = 'members' ORDER BY COALESCE(doc_date, created_at::date) DESC"));
+      return json({
+        folders: await q("SELECT id, name, parent_id FROM folders WHERE visibility = 'members' ORDER BY name"),
+        docs: await q("SELECT id, title, category, url, body, doc_date, created_at, folder_id FROM documents WHERE visibility = 'members' ORDER BY COALESCE(doc_date, created_at::date) DESC"),
+      });
     if (["events", "articles", "documents"].includes(a)) return err("Dit medlemskab afventer godkendelse fra bestyrelsen", 403);
 
     // ----- board -----
@@ -216,8 +226,7 @@ export default async (req: Request, _context: Context) => {
         const [counts] = await q<any>(`SELECT
           COUNT(*) FILTER (WHERE status='active')::int AS active,
           COUNT(*) FILTER (WHERE status='pending')::int AS pending,
-          COUNT(*) FILTER (WHERE status='active' AND (fee_paid_year IS NULL OR fee_paid_year < EXTRACT(YEAR FROM NOW())))::int AS unpaid,
-          COUNT(*) FILTER (WHERE deletion_requested_at IS NOT NULL)::int AS deletion
+          COUNT(*) FILTER (WHERE status='active' AND (fee_paid_year IS NULL OR fee_paid_year < EXTRACT(YEAR FROM NOW())))::int AS unpaid
           FROM members`);
         const tasks = await q("SELECT * FROM tasks WHERE status <> 'done' ORDER BY due_date NULLS LAST LIMIT 8");
         const events = await q("SELECT e.id, e.title, e.starts_at, (SELECT COUNT(*)::int FROM event_signups s WHERE s.event_id=e.id) AS signups FROM events e WHERE starts_at > NOW() ORDER BY starts_at LIMIT 5");
@@ -227,7 +236,7 @@ export default async (req: Request, _context: Context) => {
       }
 
       if (b === "members") {
-        if (!c && req.method === "GET") return json(await q("SELECT * FROM members ORDER BY status = 'pending' DESC, name"));
+        if (!c && req.method === "GET") return json(await q("SELECT * FROM members ORDER BY status = 'pending' DESC, status = 'ended', name"));
         if (!c && req.method === "POST") {
           const body = await req.json();
           const email = String(body.email || "").trim().toLowerCase();
@@ -236,7 +245,7 @@ export default async (req: Request, _context: Context) => {
           const [exists] = await q("SELECT id FROM members WHERE lower(email) = $1", [email]);
           if (exists) return err("Der findes allerede et medlem med den e-mail");
           const [row] = await q(
-            "INSERT INTO members (email, name, phone, postal_code, city, affiliation, role, status, fee_paid_year, notes, membership_type) VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8,$9,$10) RETURNING *",
+            "INSERT INTO members (email, name, phone, postal_code, city, affiliation, role, status, fee_paid_year, notes, membership_type, joined_at) VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8,$9,$10,NOW()) RETURNING *",
             [email, String(body.name).trim(), clean(body.phone) ?? null, clean(body.postal_code) ?? null, clean(body.city) ?? null, clean(body.affiliation) ?? null,
              body.role === "board" ? "board" : "member", body.fee_paid_year ? Number(body.fee_paid_year) : null, clean(body.notes) ?? null, memberType(body.membership_type)],
           );
@@ -244,11 +253,20 @@ export default async (req: Request, _context: Context) => {
           return json(row, 201);
         }
         if (c === "export.csv") {
-          const rows = await q<any>("SELECT name, email, phone, postal_code, city, affiliation, CASE membership_type WHEN 'fuldt' THEN 'Fuldt' WHEN 'studie' THEN 'Studie/pensionist/barn' WHEN 'stoette' THEN 'Støtte' END AS membership_type, CASE role WHEN 'board' THEN 'Bestyrelse' ELSE 'Medlem' END AS role, CASE status WHEN 'active' THEN 'Aktiv' WHEN 'pending' THEN 'Afventer' ELSE 'Udmeldt' END AS status, fee_paid_year, to_char(created_at AT TIME ZONE 'Europe/Copenhagen', 'YYYY-MM-DD') AS created_at FROM members WHERE status <> 'ended' ORDER BY name");
-          const header = ["navn", "email", "telefon", "postnr", "by", "tilknytning", "medlemstype", "rolle", "status", "kontingent_betalt_aar", "indmeldt"];
+          const year = Number(url.searchParams.get("year")) || null;
+          const where = year
+            ? "joined_at < make_date($1::int + 1, 1, 1) AND (ended_at IS NULL OR ended_at >= make_date($1::int, 1, 1))"
+            : "status <> 'ended'";
+          const rows = await q<any>("SELECT member_no, name, email, phone, postal_code, city, affiliation, CASE membership_type WHEN 'fuldt' THEN 'Fuldt' WHEN 'studie' THEN 'Studie/pensionist/barn' WHEN 'stoette' THEN 'Støtte' END AS membership_type, CASE role WHEN 'board' THEN 'Bestyrelse' ELSE 'Medlem' END AS role, CASE status WHEN 'active' THEN 'Aktiv' WHEN 'pending' THEN 'Afventer' ELSE 'Udmeldt' END AS status, fee_paid_year, to_char(joined_at AT TIME ZONE 'Europe/Copenhagen', 'YYYY-MM-DD') AS joined_at, to_char(ended_at AT TIME ZONE 'Europe/Copenhagen', 'YYYY-MM-DD') AS ended_at FROM members WHERE " + where + " ORDER BY member_no", year ? [year] : []);
+          const header = ["medlemsnr", "navn", "email", "telefon", "postnr", "by", "tilknytning", "medlemstype", "rolle", "status", "kontingent_betalt_aar", "indmeldt", "udmeldt"];
           const csv = "﻿" + [header.join(";"), ...rows.map((r) => Object.values(r).map(csvEscape).join(";"))].join("\n");
-          await audit(actor, "members:export", String(rows.length));
-          return new Response(csv, { headers: { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": 'attachment; filename="rca-medlemmer.csv"' } });
+          await audit(actor, "members:export", `${year ?? "aktuelle"}: ${rows.length}`);
+          return new Response(csv, { headers: { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": `attachment; filename="rca-medlemmer-${year ?? "aktuelle"}.csv"` } });
+        }
+        if (c === "year") {
+          const year = Number(d);
+          if (!year) return err("Angiv et år");
+          return json(await q("SELECT * FROM members WHERE joined_at < make_date($1::int + 1, 1, 1) AND (ended_at IS NULL OR ended_at >= make_date($1::int, 1, 1)) ORDER BY member_no", [year]));
         }
         if (c && req.method === "PATCH") {
           const body = await req.json();
@@ -256,12 +274,22 @@ export default async (req: Request, _context: Context) => {
           if ("membership_type" in body) body.membership_type = memberType(body.membership_type);
           const cols = allowed.filter((k) => k in body);
           if (Number(c) === member.id && "role" in body && body.role !== "board") return err("Du kan ikke fjerne din egen bestyrelsesrolle");
-          const [row] = await q(`UPDATE members SET ${cols.map((k, i) => `${k}=$${i + 1}`).join(", ")}, updated_at=NOW() WHERE id=$${cols.length + 1} RETURNING *`, [...cols.map((k) => clean(body[k])), Number(c)]);
+          if (!cols.length) return err("Ingen felter");
+          let [row] = await q<any>(`UPDATE members SET ${cols.map((k, i) => `${k}=$${i + 1}`).join(", ")}, updated_at=NOW() WHERE id=$${cols.length + 1} RETURNING *`, [...cols.map((k) => clean(body[k])), Number(c)]);
+          // Hold medlemsperioden ved lige, når status ændres
+          if (row && "status" in body)
+            [row] = await q<any>(
+              `UPDATE members SET
+                 joined_at = CASE WHEN status = 'active' AND joined_at IS NULL THEN NOW() ELSE joined_at END,
+                 ended_at = CASE WHEN status = 'ended' THEN COALESCE(ended_at, NOW()) WHEN status = 'active' THEN NULL ELSE ended_at END
+               WHERE id = $1 RETURNING *`, [row.id]);
           await audit(actor, "member:update", `${c} ${cols.join(",")}`);
           return json(row);
         }
         if (c && req.method === "DELETE") {
           if (Number(c) === member.id) return err("Du kan ikke slette dig selv");
+          const [m] = await q<any>("SELECT joined_at FROM members WHERE id = $1", [Number(c)]);
+          if (m?.joined_at) return err("Medlemmer, der har været aktive, kan ikke slettes, fordi foreningen skal kunne dokumentere sine medlemmer. Meld dem ud i stedet.");
           await q("DELETE FROM members WHERE id = $1", [Number(c)]);
           await audit(actor, "member:delete", c);
           return json({ ok: true });

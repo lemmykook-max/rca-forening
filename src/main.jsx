@@ -7,6 +7,7 @@ import {
 import { api, fmtDate, download, MEMBERSHIP } from "./api.js";
 import Board from "./Board.jsx";
 import { Modal } from "./Modal.jsx";
+import { FolderView } from "./Folders.jsx";
 import "./styles.css";
 
 const AFFILIATIONS = ["Adopteret", "Adoptivforælder", "Pårørende", "Fagperson / forsker", "Støttemedlem", "Andet"];
@@ -233,9 +234,9 @@ function Privacy() {
       <h3>Hvem ser dine oplysninger</h3>
       <p>Kun foreningens bestyrelse. Vi videregiver ikke oplysninger til andre. Platformen hostes hos Netlify, som er databehandler for foreningen.</p>
       <h3>Opbevaring</h3>
-      <p>Vi opbevarer dine oplysninger, så længe du er medlem. Efter udmeldelse sletter vi dem senest ved næste årlige gennemgang, medmindre bogføringsloven kræver, at vi gemmer betalingsoplysninger i 5 år.</p>
+      <p>Vi opbevarer dine oplysninger, så længe du er medlem. Efter udmeldelse gemmer vi navn, kontaktoplysninger, medlemsnummer, medlemstype og medlemsperiode i 5 år fra udgangen af det år, hvor du meldte dig ud. Det er nødvendigt, for at foreningen kan dokumentere sine medlemmer over for pengeinstitut (hvidvaskreglerne) og tilskudsgivere (GDPR art. 6, stk. 1, litra c og f). Derefter sletter vi oplysningerne.</p>
       <h3>Dine rettigheder</h3>
-      <p>Du kan se, rette og downloade dine data under <a href="#/medlem">Mit medlemskab</a> og bede om at blive slettet. Du kan klage til Datatilsynet (datatilsynet.dk).</p>
+      <p>Du kan se, rette og downloade dine data og melde dig ud under <a href="#/medlem">Mit medlemskab</a>. Du kan bede bestyrelsen om at slette oplysninger, som foreningen ikke er forpligtet til at gemme. Du kan klage til Datatilsynet (datatilsynet.dk).</p>
     </div>
   );
 }
@@ -379,7 +380,7 @@ function MyMembership({ member, reload }) {
       <div className="grid" style={{ marginBottom: 22 }}>
         <div className="card"><p className="muted small">Status</p><p className="stat" style={{ fontSize: "1.5rem" }}>{statusText}</p>{typeText && <p className="muted small" style={{ marginTop: 8 }}>{typeText}</p>}{member.role === "board" && <span className="pill board">Bestyrelse</span>}</div>
         <div className="card"><p className="muted small">Kontingent {year}</p><p className="stat" style={{ fontSize: "1.5rem" }}>{member.fee_paid_year >= year ? "Betalt ✓" : "Ikke registreret"}</p></div>
-        <div className="card"><p className="muted small">Medlem siden</p><p className="stat" style={{ fontSize: "1.5rem" }}>{fmtDate(member.created_at)}</p></div>
+        <div className="card"><p className="muted small">Medlemsnummer</p><p className="stat" style={{ fontSize: "1.5rem" }}>{member.member_no}</p><p className="muted small" style={{ marginTop: 8 }}>{member.joined_at ? `Medlem siden ${fmtDate(member.joined_at)}` : `Indmeldt ${fmtDate(member.created_at)}`}{member.ended_at ? ` · udmeldt ${fmtDate(member.ended_at)}` : ""}</p></div>
       </div>
       <div className="card">
         <h2>Mine oplysninger</h2>
@@ -391,17 +392,17 @@ function MyMembership({ member, reload }) {
         </form>
       </div>
       <div className="card section">
-        <h2>Dine data (GDPR)</h2>
-        <p className="muted">Du kan downloade alt, hvad RCA har registreret om dig, eller bede om at blive udmeldt og slettet.</p>
+        <h2>Dine data og udmeldelse</h2>
+        <p className="muted">Du kan downloade alt, hvad RCA har registreret om dig. Melder du dig ud, gemmer vi dit medlemsnummer og din medlemsperiode i 5 år, så foreningen kan dokumentere sine medlemmer (se <a href="#/privatliv">privatlivspolitikken</a>).</p>
         <div className="row">
           <button className="btn ghost" onClick={() => download("me/export", "mine-data-rca.json")}>Download mine data</button>
-          {member.deletion_requested_at ? (
-            <span className="pill pending">Sletning anmodet {fmtDate(member.deletion_requested_at)}</span>
-          ) : (
+          {member.status === "ended" ? (
+            <span className="pill ended">Udmeldt {fmtDate(member.ended_at)}</span>
+          ) : member.role !== "board" && (
             <button className="btn danger" onClick={async () => {
-              if (!confirm("Vil du melde dig ud og bede bestyrelsen slette dine oplysninger?")) return;
-              await api("me/delete-request", { method: "POST" }); reload();
-            }}>Meld mig ud og slet mine data</button>
+              if (!confirm("Vil du melde dig ud af RCA?")) return;
+              await api("me/resign", { method: "POST" }); reload();
+            }}>Meld mig ud</button>
           )}
         </div>
       </div>
@@ -410,24 +411,19 @@ function MyMembership({ member, reload }) {
 }
 
 function MemberDocs() {
-  const [items, setItems] = useState(null);
-  useEffect(() => { api("documents").then(setItems).catch(() => setItems([])); }, []);
+  const [data, setData] = useState(null);
+  const [current, setCurrent] = useState(null);
+  useEffect(() => { api("documents").then(setData).catch(() => setData({ folders: [], docs: [] })); }, []);
+  if (!data) return <p className="muted">Indlæser …</p>;
+  // Mapper/dokumenter, hvis overmappe kun er for bestyrelsen, vises i roden
+  const ids = new Set(data.folders.map((f) => f.id));
+  const folders = data.folders.map((f) => ({ ...f, parent_id: ids.has(f.parent_id) ? f.parent_id : null }));
+  const docs = data.docs.map((d) => ({ ...d, folder_id: ids.has(d.folder_id) ? d.folder_id : null }));
   return (
     <>
       <h1>Dokumenter</h1>
       <p className="muted">Vedtægter, referater fra generalforsamlinger og andre dokumenter for medlemmer.</p>
-      {!items ? <p className="muted">Indlæser …</p> : !items.length ? <div className="card empty">Ingen dokumenter endnu.</div> : (
-        <div className="table-wrap"><table>
-          <thead><tr><th>Dokument</th><th>Type</th><th>Dato</th></tr></thead>
-          <tbody>{items.map((d) => (
-            <tr key={d.id}>
-              <td>{d.url ? <a href={d.url} target="_blank" rel="noreferrer">{d.title}</a> : d.title}{d.body && <div className="muted small article-body">{d.body}</div>}</td>
-              <td><span className="pill">{d.category}</span></td>
-              <td>{fmtDate(d.doc_date || d.created_at)}</td>
-            </tr>
-          ))}</tbody>
-        </table></div>
-      )}
+      <FolderView folders={folders} docs={docs} current={current} setCurrent={setCurrent} />
     </>
   );
 }
