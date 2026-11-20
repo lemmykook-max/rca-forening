@@ -57,8 +57,8 @@ main { padding: 36px 0 70px; }
 /* forms */
 form.stack, .stack { display: grid; gap: 14px; }
 label { display: grid; gap: 5px; font-size: .9rem; color: var(--muted); }
-label.check { display: flex; gap: 10px; align-items: flex-start; color: var(--ink); font-size: .95rem; }
-label.check input { margin-top: 5px; }
+label.check { display: block; position: relative; padding-left: 30px; color: var(--ink); font-size: .95rem; }
+label.check input { position: absolute; left: 0; top: 3px; width: 18px; height: 18px; margin: 0; padding: 0; }
 input, select, textarea { font: inherit; color: var(--ink); background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; width: 100%; }
 textarea { min-height: 110px; resize: vertical; }
 input:focus, select:focus, textarea:focus { outline: 2px solid var(--ink-2); outline-offset: 1px; }
