@@ -143,13 +143,13 @@ export default async (req: Request, _context: Context) => {
       if (!b && req.method === "GET") return json({ email: user.email, member });
       if (!b && req.method === "POST") {
         const body = await req.json();
-        if (!member && !body.privacy_accepted) return err("Du skal acceptere privatlivspolitikken");
+        if (!member?.privacy_accepted_at && !body.privacy_accepted) return err("Du skal acceptere privatlivspolitikken");
         for (const [k, label] of [["name", "Navn"], ["phone", "Telefon"], ["postal_code", "Postnummer"], ["city", "By"]])
           if (!String(body[k] ?? "").trim()) return err(`${label} skal udfyldes`);
         const fields = [body.name || "", body.phone || null, body.postal_code || null, body.city || null, body.affiliation || null];
         let row;
         if (member) {
-          [row] = await q("UPDATE members SET name=$1, phone=$2, postal_code=$3, city=$4, affiliation=$5, updated_at=NOW() WHERE id=$6 RETURNING *", [...fields, member.id]);
+          [row] = await q("UPDATE members SET name=$1, phone=$2, postal_code=$3, city=$4, affiliation=$5, privacy_accepted_at=COALESCE(privacy_accepted_at, NOW()), updated_at=NOW() WHERE id=$6 RETURNING *", [...fields, member.id]);
         } else {
           const isBoard = boardEmails().includes(actor.toLowerCase());
           [row] = await q(
@@ -224,6 +224,21 @@ export default async (req: Request, _context: Context) => {
 
       if (b === "members") {
         if (!c && req.method === "GET") return json(await q("SELECT * FROM members ORDER BY status = 'pending' DESC, name"));
+        if (!c && req.method === "POST") {
+          const body = await req.json();
+          const email = String(body.email || "").trim().toLowerCase();
+          if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return err("Ugyldig e-mail");
+          if (!String(body.name || "").trim()) return err("Navn skal udfyldes");
+          const [exists] = await q("SELECT id FROM members WHERE lower(email) = $1", [email]);
+          if (exists) return err("Der findes allerede et medlem med den e-mail");
+          const [row] = await q(
+            "INSERT INTO members (email, name, phone, postal_code, city, affiliation, role, status, fee_paid_year, notes) VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8,$9) RETURNING *",
+            [email, String(body.name).trim(), clean(body.phone) ?? null, clean(body.postal_code) ?? null, clean(body.city) ?? null, clean(body.affiliation) ?? null,
+             body.role === "board" ? "board" : "member", body.fee_paid_year ? Number(body.fee_paid_year) : null, clean(body.notes) ?? null],
+          );
+          await audit(actor, "member:create", `${row.id} ${body.role === "board" ? "board" : "member"}`);
+          return json(row, 201);
+        }
         if (c === "export.csv") {
           const rows = await q<any>("SELECT name, email, phone, postal_code, city, affiliation, role, status, fee_paid_year, created_at FROM members WHERE status <> 'ended' ORDER BY name");
           const header = ["navn", "email", "telefon", "postnr", "by", "tilknytning", "rolle", "status", "kontingent_betalt_aar", "indmeldt"];

@@ -78,6 +78,7 @@ const Stat = ({ n, label, warn, onClick }) => (
 function Members({ me }) {
   const [rows, setRows] = useState(null); const [filter, setFilter] = useState("alle"); const [search, setSearch] = useState("");
   const [edit, setEdit] = useState(null); const [err, setErr] = useState("");
+  const [adding, setAdding] = useState(false); const [added, setAdded] = useState(null);
   const year = new Date().getFullYear();
   const load = () => api("admin/members").then(setRows).catch((e) => setErr(e.message));
   useEffect(() => { load(); }, []);
@@ -106,6 +107,7 @@ function Members({ me }) {
         <div className="row">
           <input placeholder="Søg navn eller e-mail" value={search} onChange={(e) => setSearch(e.target.value)} style={{ width: 220 }} />
           <button className="btn ghost small" onClick={() => download("admin/members/export.csv", "rca-medlemmer.csv")}>Eksportér CSV</button>
+          <button className="btn small" onClick={() => { setAdded(null); setAdding(true); }}>+ Tilføj medlem</button>
         </div>
       </div>
       {err && <div className="error">{err}</div>}
@@ -131,12 +133,62 @@ function Members({ me }) {
           ))}
         </tbody>
       </table></div>
+      {adding && (
+        <Modal onClose={() => setAdding(false)}>
+          {added ? <Invite m={added} /> : (
+            <>
+              <h2>Tilføj medlem</h2>
+              <p className="muted">Personen bliver oprettet som aktivt medlem. Bagefter opretter de selv en konto med samme e-mail og får adgang med det samme.</p>
+              <AddMember onSave={async (body) => { const row = await api("admin/members", { method: "POST", body }); setAdded(row); load(); }} />
+            </>
+          )}
+        </Modal>
+      )}
       {edit && (
         <Modal onClose={() => setEdit(null)}>
           <h2>{edit.name || edit.email}</h2>
           <MemberEdit m={edit} me={me} onSave={async (body) => { await patch(edit, body); setEdit(null); }} onDelete={() => remove(edit)} />
         </Modal>
       )}
+    </>
+  );
+}
+function AddMember({ onSave }) {
+  const [f, setF] = useState({ name: "", email: "", phone: "", postal_code: "", city: "", affiliation: "", role: "member", fee_paid_year: "" });
+  const [err, setErr] = useState(""); const [busy, setBusy] = useState(false);
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  return (
+    <form className="stack" onSubmit={async (e) => { e.preventDefault(); setErr(""); setBusy(true); try { await onSave(f); } catch (e2) { setErr(e2.message); } setBusy(false); }}>
+      <div className="form-grid">
+        <label>Navn<input required value={f.name} onChange={set("name")} /></label>
+        <label>E-mail<input required type="email" value={f.email} onChange={set("email")} /></label>
+        <label>Rolle<select value={f.role} onChange={set("role")}><option value="member">Medlem</option><option value="board">Bestyrelse</option></select></label>
+        <label>Telefon<input value={f.phone} onChange={set("phone")} /></label>
+        <label>Postnr.<input value={f.postal_code} onChange={set("postal_code")} /></label>
+        <label>By<input value={f.city} onChange={set("city")} /></label>
+        <label>Tilknytning<select value={f.affiliation} onChange={set("affiliation")}><option value="">Ikke oplyst</option>{["Adopteret", "Adoptivforælder", "Pårørende", "Fagperson / forsker", "Støttemedlem", "Andet"].map((a) => <option key={a}>{a}</option>)}</select></label>
+        <label>Kontingent betalt for år<input type="number" value={f.fee_paid_year} onChange={set("fee_paid_year")} /></label>
+      </div>
+      <p className="muted small">Telefon, postnummer og by kan medlemmet selv udfylde, når de logger ind første gang.</p>
+      {err && <div className="error">{err}</div>}
+      <div><button className="btn" disabled={busy}>Opret medlem</button></div>
+    </form>
+  );
+}
+function Invite({ m }) {
+  const url = window.location.origin + "/#/login";
+  const subject = "Din adgang til RCA's foreningsplatform";
+  const text = `Hej ${m.name.split(" ")[0]}\n\nDu er nu oprettet${m.role === "board" ? " som bestyrelsesmedlem" : " som medlem"} på RCA's foreningsplatform.\n\nGå ind på ${url}, vælg "Bliv medlem" og opret en konto med denne e-mail: ${m.email}\n\nNår du har bekræftet din e-mail og logget ind, har du adgang med det samme.\n\nVenlig hilsen\nRessourcecenter for Adopterede`;
+  const [copied, setCopied] = useState(false);
+  return (
+    <>
+      <h2>{m.name} er oprettet ✓</h2>
+      <p>Send en besked til {m.email}, så de kan oprette deres login:</p>
+      <textarea readOnly value={text} style={{ minHeight: 200 }} />
+      <div className="row" style={{ marginTop: 12 }}>
+        <a className="btn" href={`mailto:${m.email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(text)}`}>Åbn i mail</a>
+        <button className="btn ghost" onClick={() => { navigator.clipboard.writeText(text); setCopied(true); }}>{copied ? "Kopieret ✓" : "Kopiér tekst"}</button>
+      </div>
     </>
   );
 }

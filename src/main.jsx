@@ -61,7 +61,7 @@ function App() {
   else if (route === "privatliv") page = <Privacy />;
   else if (route === "login") page = <Auth onDone={async () => { await loadMe(); go("medlem"); }} />;
   else if (!user) page = <Auth onDone={async () => { await loadMe(); }} />;
-  else if (!member) page = <JoinForm onDone={loadMe} email={user.email} />;
+  else if (!member || !member.privacy_accepted_at) page = <JoinForm onDone={loadMe} email={user.email} existing={member} />;
   else if (route === "medlem") page = <MyMembership member={member} reload={loadMe} />;
   else if (route === "dokumenter") page = isActive ? <MemberDocs /> : <Pending />;
   else if (route.startsWith("bestyrelse")) page = isBoard ? <Board me={member} /> : <p>Kun for bestyrelsen.</p>;
@@ -318,10 +318,10 @@ function ProfileFields({ f, set }) {
   );
 }
 
-function JoinForm({ onDone, email }) {
-  const [f, setF] = useState({ name: "", privacy_accepted: false });
+function JoinForm({ onDone, email, existing }) {
+  const [f, setF] = useState(() => ({ ...(existing || { name: "" }), privacy_accepted: false }));
   const [err, setErr] = useState(""); const [cfg, setCfg] = useState({});
-  useEffect(() => { getUser().then((u) => u?.name && setF((x) => ({ ...x, name: u.name }))); api("public/config").then(setCfg).catch(() => {}); }, []);
+  useEffect(() => { getUser().then((u) => u?.name && setF((x) => ({ ...x, name: x.name || u.name }))); api("public/config").then(setCfg).catch(() => {}); }, []);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value });
   const submit = async (e) => {
     e.preventDefault(); setErr("");
@@ -329,14 +329,14 @@ function JoinForm({ onDone, email }) {
   };
   return (
     <div className="card" style={{ maxWidth: 760 }}>
-      <h1>Indmeldelse i RCA</h1>
-      <p className="muted">Du er logget ind som {email}. Udfyld dine oplysninger, så behandler bestyrelsen din indmeldelse.</p>
+      <h1>{existing ? "Velkommen til RCA" : "Indmeldelse i RCA"}</h1>
+      <p className="muted">Du er logget ind som {email}. {existing ? "Bestyrelsen har oprettet dig som medlem. Tjek dine oplysninger og accepter privatlivspolitikken." : "Udfyld dine oplysninger, så behandler bestyrelsen din indmeldelse."}</p>
       <form className="stack" onSubmit={submit}>
         <ProfileFields f={f} set={set} />
         <label className="check"><input type="checkbox" required checked={f.privacy_accepted} onChange={set("privacy_accepted")} />Jeg har læst <a href="#/privatliv" target="_blank">privatlivspolitikken</a> og ved, hvordan RCA behandler mine oplysninger.</label>
         {cfg.feeText && <p className="muted small">{cfg.feeText}</p>}
         {err && <div className="error">{err}</div>}
-        <div><button className="btn">Send indmeldelse</button></div>
+        <div><button className="btn">{existing ? "Gem og fortsæt" : "Send indmeldelse"}</button></div>
       </form>
     </div>
   );
