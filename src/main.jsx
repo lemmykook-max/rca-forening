@@ -227,7 +227,7 @@ function Privacy() {
       <h1>Privatlivspolitik</h1>
       <p><b>Dataansvarlig:</b> Ressourcecenter for Adopterede (RCA){cfg.contactEmail ? `, ${cfg.contactEmail}` : ""}.</p>
       <h3>Hvilke oplysninger vi behandler</h3>
-      <p>Navn, e-mail, telefon (valgfrit), postnummer og by (valgfrit), din tilknytning til adoptionsområdet (valgfrit), kontingentstatus, tilmeldinger til arrangementer. Vi beder ikke om oplysninger om din adoptionshistorie, oprindelsesland, helbred eller andre følsomme forhold.</p>
+      <p>Navn, e-mail, telefon, postnummer og by, din tilknytning til adoptionsområdet (valgfrit), kontingentstatus, tilmeldinger til arrangementer. Vi beder ikke om oplysninger om din adoptionshistorie, oprindelsesland, helbred eller andre følsomme forhold.</p>
       <h3>Formål og grundlag</h3>
       <p>Vi behandler oplysningerne for at administrere dit medlemskab, opkræve kontingent, indkalde til generalforsamling og invitere til arrangementer (GDPR art. 6, stk. 1, litra b – medlemsforholdet).</p>
       <h3>Hvem ser dine oplysninger</h3>
@@ -305,9 +305,9 @@ function ProfileFields({ f, set }) {
   return (
     <div className="form-grid">
       <label>Fulde navn<input required value={f.name || ""} onChange={set("name")} /></label>
-      <label>Telefon (valgfrit)<input value={f.phone || ""} onChange={set("phone")} /></label>
-      <label>Postnummer (valgfrit)<input value={f.postal_code || ""} onChange={set("postal_code")} /></label>
-      <label>By (valgfrit)<input value={f.city || ""} onChange={set("city")} /></label>
+      <label>Telefon<input required type="tel" value={f.phone || ""} onChange={set("phone")} autoComplete="tel" /></label>
+      <label>Postnummer<input required inputMode="numeric" pattern="[0-9]{4}" title="4 cifre" value={f.postal_code || ""} onChange={set("postal_code")} autoComplete="postal-code" /></label>
+      <label>By<input required value={f.city || ""} onChange={set("city")} autoComplete="address-level2" /></label>
       <label>Tilknytning (valgfrit)
         <select value={f.affiliation || ""} onChange={set("affiliation")}>
           <option value="">Vil ikke oplyse</option>

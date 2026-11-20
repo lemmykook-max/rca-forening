@@ -144,6 +144,8 @@ export default async (req: Request, _context: Context) => {
       if (!b && req.method === "POST") {
         const body = await req.json();
         if (!member && !body.privacy_accepted) return err("Du skal acceptere privatlivspolitikken");
+        for (const [k, label] of [["name", "Navn"], ["phone", "Telefon"], ["postal_code", "Postnummer"], ["city", "By"]])
+          if (!String(body[k] ?? "").trim()) return err(`${label} skal udfyldes`);
         const fields = [body.name || "", body.phone || null, body.postal_code || null, body.city || null, body.affiliation || null];
         let row;
         if (member) {
