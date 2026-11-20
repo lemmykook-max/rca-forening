@@ -227,7 +227,7 @@ function Privacy() {
       <h1>Privatlivspolitik</h1>
       <p><b>Dataansvarlig:</b> Ressourcecenter for Adopterede (RCA){cfg.contactEmail ? `, ${cfg.contactEmail}` : ""}.</p>
       <h3>Hvilke oplysninger vi behandler</h3>
-      <p>Navn, e-mail, telefon, postnummer og by, din tilknytning til adoptionsområdet (valgfrit), kontingentstatus, tilmeldinger til arrangementer. Vi beder ikke om oplysninger om din adoptionshistorie, oprindelsesland, helbred eller andre følsomme forhold.</p>
+      <p>Navn, e-mail, telefon, postnummer og by, din tilknytning til adoptionsområdet (valgfrit), kontingentstatus og tilmeldinger til arrangementer. Vi beder ikke om oplysninger om din adoptionshistorie, oprindelsesland, helbred eller andre følsomme forhold.</p>
       <h3>Formål og grundlag</h3>
       <p>Vi behandler oplysningerne for at administrere dit medlemskab, opkræve kontingent, indkalde til generalforsamling og invitere til arrangementer (GDPR art. 6, stk. 1, litra b – medlemsforholdet).</p>
       <h3>Hvem ser dine oplysninger</h3>
