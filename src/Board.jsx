@@ -6,7 +6,7 @@ import { FolderView, folderOptions } from "./Folders.jsx";
 const TABS = [
   ["overblik", "Overblik"], ["medlemmer", "Medlemmer"], ["arrangementer", "Arrangementer"],
   ["dokumenter", "Dokumenter"], ["opgaver", "Opgaver"], ["aarshjul", "Årshjul"],
-  ["viden", "Videnscenter"], ["log", "Log"],
+  ["hoering", "Høring"], ["viden", "Videnscenter"], ["log", "Log"],
 ];
 
 export default function Board({ me }) {
@@ -24,6 +24,7 @@ export default function Board({ me }) {
       {tab === "dokumenter" && <Documents />}
       {tab === "opgaver" && <Crud {...TASKS} />}
       {tab === "aarshjul" && <YearWheel />}
+      {tab === "hoering" && <Crud {...HEARINGS} />}
       {tab === "viden" && <Crud {...ARTICLES} />}
       {tab === "log" && <AuditLog />}
     </>
@@ -254,6 +255,55 @@ const TASKS = {
   }], ["status", "Status", (v) => <span className={"pill " + (v === "done" ? "ended" : v === "doing" ? "" : "pending")}>{{ todo: "Ikke startet", doing: "I gang", done: "Færdig" }[v]}</span>]],
   quick: (row, save) => row.status !== "done" && <button className="btn small ghost" onClick={() => save(row, { status: "done" })}>Færdig ✓</button>,
 };
+const HEARINGS = {
+  resource: "hearings", title: "Høringer", newLabel: "Ny høring",
+  intro: "Kun godkendte medlemmer kan svare. Link til høringen: rca-forening.netlify.app/#/hoering",
+  fields: [
+    { k: "title", l: "Titel", req: true }, { k: "deadline", l: "Høringsfrist (sidste dag)", type: "date", req: true },
+    { k: "status", l: "Status", type: "select", opts: [["open", "Åben (lukker automatisk efter fristen)"], ["closed", "Lukket"], ["hidden", "Skjult for medlemmer"]], def: "open" },
+    { k: "documents_url", l: "Link til høringsmateriale", wide: true },
+    { k: "sections", l: "Valgmuligheder for paragraf (kommasepareret)", wide: true },
+    { k: "description", l: "Tekst til medlemmerne", type: "textarea", wide: true },
+  ],
+  cols: [["title", "Høring"], ["deadline", "Frist", (v) => fmtDate(v)], ["status", "Status", (v) => <span className={"pill " + (v === "open" ? "" : "ended")}>{{ open: "Åben", closed: "Lukket", hidden: "Skjult" }[v]}</span>]],
+  extra: (row) => <HearingResponses id={row.id} />,
+};
+function HearingResponses({ id }) {
+  const [rows, setRows] = useState(null); const [open, setOpen] = useState(null);
+  const load = () => api(`admin/hearings/${id}/responses`).then(setRows).catch(() => setRows([]));
+  useEffect(() => { load(); }, [id]);
+  if (!rows) return null;
+  const groups = {};
+  rows.forEach((r) => { (groups[r.section || "Ingen paragraf valgt"] ||= []).push(r); });
+  return (
+    <>
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <h3 style={{ margin: 0 }}>Høringssvar ({rows.length})</h3>
+        {rows.length > 0 && (
+          <div className="row">
+            <button className="btn small ghost" onClick={() => download(`admin/hearings/${id}/export.csv`, `hoeringssvar-${id}.csv`)}>Eksportér CSV</button>
+            <button className="btn small danger" onClick={async () => {
+              if (!confirm(`Slet alle ${rows.length} høringssvar permanent? Gør det først efter generalforsamlingen.`)) return;
+              await api(`admin/hearings/${id}/responses`, { method: "DELETE" }); load();
+            }}>Slet alle svar</button>
+          </div>
+        )}
+      </div>
+      {!rows.length && <p className="muted">Ingen svar endnu.</p>}
+      {Object.entries(groups).sort(([a], [b]) => a.localeCompare(b, "da", { numeric: true })).map(([sec, list]) => (
+        <div key={sec} style={{ marginTop: 14 }}>
+          <button className="btn small ghost" onClick={() => setOpen(open === sec ? null : sec)}>{open === sec ? "▾" : "▸"} {sec} ({list.length})</button>
+          {open === sec && list.map((r) => (
+            <div key={r.id} style={{ borderLeft: "3px solid var(--terra)", padding: "4px 0 4px 12px", margin: "10px 0" }}>
+              <div className="muted small">{r.name} (nr. {r.member_no}) · {fmtDate(r.created_at, true)}</div>
+              <div className="article-body">{r.body}</div>
+            </div>
+          ))}
+        </div>
+      ))}
+    </>
+  );
+}
 const ARTICLES = {
   resource: "articles", title: "Videnscenter", newLabel: "Ny artikel / ressource",
   fields: [

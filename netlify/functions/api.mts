@@ -58,6 +58,7 @@ const TABLES: Record<string, { cols: string[]; order: string }> = {
   documents: { cols: ["title", "category", "url", "body", "visibility", "doc_date", "folder_id"], order: "COALESCE(doc_date, created_at::date) DESC, id DESC" },
   tasks: { cols: ["title", "owner", "due_date", "status", "notes"], order: "status = 'done', due_date NULLS LAST, id" },
   "year-wheel": { cols: ["month", "day", "title", "description", "owner"], order: "month, day NULLS LAST, id" },
+  hearings: { cols: ["title", "description", "documents_url", "deadline", "sections", "status"], order: "deadline DESC" },
   articles: { cols: ["title", "summary", "body", "tags", "source_url", "visibility", "published"], order: "created_at DESC" },
 };
 const tableName = (k: string) => (k === "year-wheel" ? "year_wheel" : k);
@@ -209,6 +210,33 @@ export default async (req: Request, _context: Context) => {
         return json({ ok: true });
       }
     }
+    // Høringer: kun for godkendte medlemmer
+    if (a === "hearings" && isActive) {
+      const OPEN = "status = 'open' AND deadline >= (NOW() AT TIME ZONE 'Europe/Copenhagen')::date";
+      if (!b && req.method === "GET") {
+        const hearings = await q<any>(`SELECT *, (${OPEN}) AS is_open FROM hearings WHERE status <> 'hidden' ORDER BY deadline DESC`);
+        const mine = await q<any>("SELECT id, hearing_id, section, body, created_at FROM hearing_responses WHERE member_id = $1 ORDER BY created_at", [member.id]);
+        return json(hearings.map((h) => ({ ...h, mine: mine.filter((r) => r.hearing_id === h.id) })));
+      }
+      if (b && c === "responses" && req.method === "POST") {
+        const [h] = await q<any>(`SELECT id FROM hearings WHERE id = $1 AND ${OPEN}`, [Number(b)]);
+        if (!h) return err("Høringen er lukket");
+        const body = await req.json();
+        const text = String(body.body || "").trim();
+        if (!text) return err("Skriv dit høringssvar");
+        if (text.length > 10000) return err("Høringssvaret er for langt (højst 10.000 tegn)");
+        const [row] = await q("INSERT INTO hearing_responses (hearing_id, member_id, section, body) VALUES ($1,$2,$3,$4) RETURNING id, hearing_id, section, body, created_at",
+          [h.id, member.id, String(body.section || "").slice(0, 100) || null, text]);
+        await audit(actor, "hearing:response", `${h.id}`);
+        return json(row, 201);
+      }
+      if (b && c === "responses" && d && req.method === "DELETE") {
+        const [h] = await q<any>(`SELECT id FROM hearings WHERE id = $1 AND ${OPEN}`, [Number(b)]);
+        if (!h) return err("Høringen er lukket, så svaret kan ikke trækkes tilbage");
+        await q("DELETE FROM hearing_responses WHERE id = $1 AND member_id = $2 AND hearing_id = $3", [Number(d), member.id, h.id]);
+        return json({ ok: true });
+      }
+    }
     if (a === "articles" && isActive)
       return json(await q("SELECT * FROM articles WHERE published ORDER BY created_at DESC"));
     if (a === "documents" && isActive)
@@ -216,7 +244,7 @@ export default async (req: Request, _context: Context) => {
         folders: await q("SELECT id, name, parent_id FROM folders WHERE visibility = 'members' ORDER BY name"),
         docs: await q("SELECT id, title, category, url, body, doc_date, created_at, folder_id FROM documents WHERE visibility = 'members' ORDER BY COALESCE(doc_date, created_at::date) DESC"),
       });
-    if (["events", "articles", "documents"].includes(a)) return err("Dit medlemskab afventer godkendelse fra bestyrelsen", 403);
+    if (["events", "articles", "documents", "hearings"].includes(a)) return err("Dit medlemskab afventer godkendelse fra bestyrelsen", 403);
 
     // ----- board -----
     if (a === "admin") {
@@ -298,6 +326,25 @@ export default async (req: Request, _context: Context) => {
 
       if (b === "events" && d === "signups") {
         return json(await q("SELECT m.name, m.email, s.created_at FROM event_signups s JOIN members m ON m.id = s.member_id WHERE s.event_id = $1 ORDER BY s.created_at", [Number(c)]));
+      }
+
+      if (b === "hearings" && c && d === "responses") {
+        if (req.method === "DELETE") {
+          const r = await q("DELETE FROM hearing_responses WHERE hearing_id = $1 RETURNING id", [Number(c)]);
+          await audit(actor, "hearing:delete-responses", `${c}: ${r.length}`);
+          return json({ deleted: r.length });
+        }
+        return json(await q(
+          "SELECT r.id, r.section, r.body, r.created_at, m.name, m.email, m.member_no FROM hearing_responses r JOIN members m ON m.id = r.member_id WHERE r.hearing_id = $1 ORDER BY r.created_at",
+          [Number(c)]));
+      }
+      if (b === "hearings" && c && d === "export.csv") {
+        const rows = await q<any>(
+          "SELECT COALESCE(r.section, 'Ikke angivet') AS section, m.member_no, m.name, m.email, to_char(r.created_at AT TIME ZONE 'Europe/Copenhagen', 'YYYY-MM-DD HH24:MI') AS created, r.body FROM hearing_responses r JOIN members m ON m.id = r.member_id WHERE r.hearing_id = $1 ORDER BY r.section, r.created_at",
+          [Number(c)]);
+        const csv = "\uFEFF" + [["paragraf", "medlemsnr", "navn", "email", "tidspunkt", "svar"].join(";"), ...rows.map((r) => Object.values(r).map(csvEscape).join(";"))].join("\n");
+        await audit(actor, "hearing:export", `${c}: ${rows.length}`);
+        return new Response(csv, { headers: { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": `attachment; filename="hoeringssvar-${c}.csv"` } });
       }
 
       if (b === "audit") return json(await q("SELECT * FROM audit_log ORDER BY created_at DESC LIMIT 200"));

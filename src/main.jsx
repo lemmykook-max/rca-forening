@@ -61,16 +61,17 @@ function App() {
   else if (route === "arrangementer") page = <Events user={user} isActive={isActive} />;
   else if (route === "privatliv") page = <Privacy />;
   else if (route === "login") page = <Auth onDone={async () => { await loadMe(); go("medlem"); }} />;
-  else if (!user) page = <Auth onDone={async () => { await loadMe(); }} />;
+  else if (!user) page = <>{route === "hoering" && <div className="notice narrow" style={{ margin: "0 auto 18px" }}>Høringen er kun for medlemmer af RCA. Log ind, eller meld dig ind først.</div>}<Auth onDone={async () => { await loadMe(); }} /></>;
   else if (!member || !member.privacy_accepted_at) page = <JoinForm onDone={loadMe} email={user.email} existing={member} />;
   else if (route === "medlem") page = <MyMembership member={member} reload={loadMe} />;
   else if (route === "dokumenter") page = isActive ? <MemberDocs /> : <Pending />;
+  else if (route === "hoering") page = isActive ? <Hearings /> : member.status === "ended" ? <div className="notice">Høringen er kun for nuværende medlemmer.</div> : <Pending />;
   else if (route.startsWith("bestyrelse")) page = isBoard ? <Board me={member} /> : <p>Kun for bestyrelsen.</p>;
   else page = <p>Siden findes ikke. <a href="#/">Til forsiden</a></p>;
 
   const nav = [
     ["", "Forside"], ["arrangementer", "Arrangementer"], ["viden", "Videnscenter"],
-    ...(isActive ? [["dokumenter", "Dokumenter"]] : []),
+    ...(isActive ? [["dokumenter", "Dokumenter"], ["hoering", "Høring"]] : []),
     ...(user ? [["medlem", "Mit medlemskab"]] : []),
     ...(isBoard ? [["bestyrelse", "Bestyrelse"]] : []),
   ];
@@ -425,6 +426,74 @@ function MemberDocs() {
       <p className="muted">Vedtægter, referater fra generalforsamlinger og andre dokumenter for medlemmer.</p>
       <FolderView folders={folders} docs={docs} current={current} setCurrent={setCurrent} />
     </>
+  );
+}
+
+function Hearings() {
+  const [items, setItems] = useState(null);
+  const [err, setErr] = useState("");
+  const load = () => api("hearings").then(setItems).catch((e) => setErr(e.message));
+  useEffect(() => { load(); }, []);
+  if (!items) return <p className="muted">{err || "Indlæser …"}</p>;
+  return (
+    <>
+      <h1>Høring</h1>
+      {!items.length && <div className="card empty">Der er ingen høringer lige nu.</div>}
+      {items.map((h) => <Hearing key={h.id} h={h} reload={load} />)}
+    </>
+  );
+}
+
+function Hearing({ h, reload }) {
+  const sections = (h.sections || "").split(",").map((x) => x.trim()).filter(Boolean);
+  const [f, setF] = useState({ section: "", body: "" });
+  const [msg, setMsg] = useState(""); const [err, setErr] = useState(""); const [busy, setBusy] = useState(false);
+  const submit = async (e) => {
+    e.preventDefault(); setErr(""); setMsg(""); setBusy(true);
+    try { await api(`hearings/${h.id}/responses`, { method: "POST", body: f }); setF({ section: "", body: "" }); setMsg("Tak! Dit høringssvar er modtaget."); reload(); }
+    catch (e2) { setErr(e2.message); }
+    setBusy(false);
+  };
+  const withdraw = async (r) => {
+    if (!confirm("Træk dette høringssvar tilbage?")) return;
+    try { await api(`hearings/${h.id}/responses/${r.id}`, { method: "DELETE" }); reload(); } catch (e2) { setErr(e2.message); }
+  };
+  return (
+    <div className="card section" style={{ maxWidth: 820 }}>
+      <span className={"pill " + (h.is_open ? "" : "ended")}>{h.is_open ? `Åben · frist ${fmtDate(h.deadline)}` : `Lukket ${fmtDate(h.deadline)}`}</span>
+      <h2 style={{ marginTop: 10 }}>{h.title}</h2>
+      {h.description && <p className="article-body">{h.description}</p>}
+      {h.documents_url && <p><a href={h.documents_url} target="_blank" rel="noreferrer">Læs vedtægter og oversigt over ændringer →</a></p>}
+      {h.is_open && (
+        <form className="stack" onSubmit={submit} style={{ marginTop: 18 }}>
+          {sections.length > 0 && (
+            <label>Hvilken paragraf handler dit svar om?
+              <select value={f.section} onChange={(e) => setF({ ...f, section: e.target.value })}>
+                <option value="">Vælg …</option>
+                {sections.map((x) => <option key={x}>{x}</option>)}
+              </select>
+            </label>
+          )}
+          <label>Dit høringssvar<textarea required maxLength={10000} value={f.body} onChange={(e) => setF({ ...f, body: e.target.value })} style={{ minHeight: 160 }} /></label>
+          <p className="muted small">Svaret sendes i dit navn til bestyrelsen og slettes efter den ekstraordinære generalforsamling.</p>
+          {err && <div className="error">{err}</div>}
+          {msg && <div className="notice ok">{msg}</div>}
+          <div><button className="btn" disabled={busy}>Send høringssvar</button></div>
+        </form>
+      )}
+      {h.mine.length > 0 && (
+        <div className="section">
+          <h3>Dine høringssvar ({h.mine.length})</h3>
+          {h.mine.map((r) => (
+            <div key={r.id} style={{ borderLeft: "3px solid var(--terra)", padding: "4px 0 4px 12px", marginBottom: 12 }}>
+              <div className="muted small">{r.section || "Ingen paragraf valgt"} · {fmtDate(r.created_at, true)}</div>
+              <div className="article-body">{r.body}</div>
+              {h.is_open && <button className="btn small ghost" style={{ marginTop: 6 }} onClick={() => withdraw(r)}>Træk tilbage</button>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
