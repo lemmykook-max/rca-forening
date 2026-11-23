@@ -36,4 +36,12 @@ export const MEMBERSHIP = [
   ["studie", "Studie-, pensionist- og børnemedlemskab", "For studerende på SU, pensionister og børn til og med 17 år. Stemmeret fra 18 år"],
   ["stoette", "Støttemedlemskab", "For familie, venner, fagfolk og andre. Taleret, ikke stemmeret"],
 ];
-export const membershipLabel = (v) => ({ fuldt: "Fuldt", studie: "Studie/pension./barn", stoette: "Støtte" }[v] || "");
+export const IDEA_CATEGORIES = ["Arrangementer", "Fællesskab og netværk", "Viden og research", "Kommunikation", "Politik og rettigheder", "Foreningen", "Andet"];
+export const IDEA_MATURITY = ["Løs tanke", "Gennemarbejdet forslag"];
+export const IDEA_STATUS = [
+  ["new", "Ny", "pending"], ["discussing", "Drøftes i bestyrelsen", ""], ["planned", "Besluttet", "planned"],
+  ["doing", "I gang", "planned"], ["done", "Gennemført", "done"], ["parked", "Parkeret", "ended"], ["declined", "Ikke aktuel", "ended"],
+];
+export const ideaStatus = (v) => IDEA_STATUS.find(([k]) => k === v) || [v, v, ""];
+
+export const membershipLabel =(v) => ({ fuldt: "Fuldt", studie: "Studie/pension./barn", stoette: "Støtte" }[v] || "");

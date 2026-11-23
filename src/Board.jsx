@@ -1,12 +1,12 @@
 import React, { useEffect, useState } from "react";
-import { api, fmtDate, MONTHS, download, MEMBERSHIP, membershipLabel } from "./api.js";
+import { api, fmtDate, MONTHS, download, MEMBERSHIP, membershipLabel, IDEA_STATUS, IDEA_CATEGORIES, ideaStatus } from "./api.js";
 import { Modal } from "./Modal.jsx";
 import { FolderView, folderOptions } from "./Folders.jsx";
 
 const TABS = [
   ["overblik", "Overblik"], ["medlemmer", "Medlemmer"], ["arrangementer", "Arrangementer"],
   ["dokumenter", "Dokumenter"], ["opgaver", "Opgaver"], ["aarshjul", "Årshjul"],
-  ["hoering", "Høring"], ["viden", "Videnscenter"], ["log", "Log"],
+  ["hoering", "Høring"], ["idebank", "Idébank"], ["viden", "Videnscenter"], ["log", "Log"],
 ];
 
 export default function Board({ me }) {
@@ -25,6 +25,7 @@ export default function Board({ me }) {
       {tab === "opgaver" && <Crud {...TASKS} />}
       {tab === "aarshjul" && <YearWheel />}
       {tab === "hoering" && <Crud {...HEARINGS} />}
+      {tab === "idebank" && <BoardIdeas />}
       {tab === "viden" && <Crud {...ARTICLES} />}
       {tab === "log" && <AuditLog />}
     </>
@@ -44,6 +45,7 @@ function Dashboard({ pick }) {
         <Stat n={c.active} label="Aktive medlemmer" onClick={() => pick("medlemmer")} />
         <Stat n={c.pending} label="Afventer godkendelse" warn={c.pending > 0} onClick={() => pick("medlemmer")} />
         <Stat n={c.unpaid} label={`Mangler kontingent ${new Date().getFullYear()}`} warn={c.unpaid > 0} onClick={() => pick("medlemmer")} />
+        <Stat n={c.new_ideas} label="Nye idéer fra medlemmer" warn={c.new_ideas > 0} onClick={() => pick("idebank")} />
       </div>
       <div className="grid section">
         <div className="card">
@@ -459,6 +461,85 @@ function YearWheel() {
         </Modal>
       )}
     </>
+  );
+}
+
+/* ---------- idébank ---------- */
+function BoardIdeas() {
+  const [rows, setRows] = useState(null); const [open, setOpen] = useState(null); const [err, setErr] = useState("");
+  const [filter, setFilter] = useState("aktive");
+  const load = () => api("admin/ideas").then(setRows).catch((e) => setErr(e.message));
+  useEffect(() => { load(); }, []);
+  if (!rows) return <p className="muted">{err || "Indlæser …"}</p>;
+  const closed = ["done", "parked", "declined"];
+  const shown = rows.filter((r) => filter === "alle" || (filter === "nye" ? r.status === "new" : !closed.includes(r.status)));
+  const save = async (body) => {
+    setErr("");
+    try { await api(`admin/ideas/${open.id}`, { method: "PATCH", body }); setOpen(null); load(); } catch (e) { setErr(e.message); }
+  };
+  const del = async () => {
+    if (!confirm(`Slet idéen “${open.title}” permanent? Overvej at skjule den i stedet.`)) return;
+    await api(`admin/ideas/${open.id}`, { method: "DELETE" }); setOpen(null); load();
+  };
+  return (
+    <>
+      <div className="row" style={{ justifyContent: "space-between", marginBottom: 14 }}>
+        <p className="muted" style={{ margin: 0, maxWidth: 640 }}>Medlemmernes idéer. Sæt status og skriv et kort svar, som medlemmerne kan se. Link til idébanken: rca-forening.netlify.app/#/idebank</p>
+        <div className="row">
+          {[["aktive", "Åbne"], ["nye", "Nye"], ["alle", "Alle"]].map(([k, l]) => (
+            <button key={k} className={"btn small " + (filter === k ? "" : "ghost")} onClick={() => setFilter(k)}>{l}</button>
+          ))}
+        </div>
+      </div>
+      {err && <div className="error">{err}</div>}
+      <div className="table-wrap"><table>
+        <thead><tr><th>Idé</th><th>Fra</th><th>Støtter</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          {!shown.length && <tr><td colSpan={5} className="empty">Ingen idéer i denne visning.</td></tr>}
+          {shown.map((r) => {
+            const [, label, cls] = ideaStatus(r.status);
+            return (
+              <tr key={r.id}>
+                <td><b>{r.title}</b>{r.hidden && <> <span className="pill ended">Skjult</span></>}<div className="muted small">{[r.category, r.maturity, fmtDate(r.created_at)].filter(Boolean).join(" · ")}</div></td>
+                <td>{r.member_name || <span className="muted">Slettet medlem</span>}{r.member_no && <div className="muted small">nr. {r.member_no}{r.show_name ? "" : " · anonym for medlemmer"}</div>}{r.wants_to_help && <div className="small" style={{ color: "var(--terra)" }}>Vil gerne hjælpe</div>}</td>
+                <td>{r.supports}</td>
+                <td><span className={"pill " + cls}>{label}</span></td>
+                <td><button className="btn small ghost" onClick={() => setOpen(r)}>Åbn</button></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table></div>
+      {open && (
+        <Modal onClose={() => setOpen(null)}>
+          <h2>{open.title}</h2>
+          <p className="muted small">{[open.category, open.maturity, fmtDate(open.created_at, true)].filter(Boolean).join(" · ")} · {open.supports} støtter</p>
+          <p className="small">Fra <b>{open.member_name || "slettet medlem"}</b>{open.member_email ? ` · ${open.member_email}` : ""}{open.member_no ? ` · nr. ${open.member_no}` : ""}{open.wants_to_help ? " · vil gerne være med til at føre idéen ud i livet" : ""}</p>
+          {open.body && <div className="article-body card" style={{ boxShadow: "none" }}>{open.body}</div>}
+          <div className="section" style={{ marginTop: 20 }}>
+            <IdeaReview idea={open} onSave={save} onDelete={del} />
+          </div>
+        </Modal>
+      )}
+    </>
+  );
+}
+function IdeaReview({ idea, onSave, onDelete }) {
+  const [f, setF] = useState({ status: idea.status, board_reply: idea.board_reply || "", hidden: !!idea.hidden, category: idea.category || "" });
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value });
+  return (
+    <form className="stack" onSubmit={(e) => { e.preventDefault(); onSave(f); }}>
+      <div className="form-grid">
+        <label>Status<select value={f.status} onChange={set("status")}>{IDEA_STATUS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></label>
+        <label>Emne<select value={f.category} onChange={set("category")}><option value="">Ikke valgt</option>{IDEA_CATEGORIES.map((c) => <option key={c}>{c}</option>)}</select></label>
+      </div>
+      <label>Svar til medlemmerne (vises ved idéen)<textarea value={f.board_reply} onChange={set("board_reply")} placeholder="Fx Tak for idéen! Vi tager den op på bestyrelsesmødet i januar." /></label>
+      <label className="check"><input type="checkbox" checked={f.hidden} onChange={set("hidden")} />Skjul for de andre medlemmer (fx hvis den indeholder personlige oplysninger)</label>
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <button className="btn">Gem</button>
+        <button type="button" className="btn danger" onClick={onDelete}>Slet</button>
+      </div>
+    </form>
   );
 }
 

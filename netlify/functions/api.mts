@@ -16,6 +16,22 @@ async function q<T = any>(text: string, params: unknown[] = []): Promise<T[]> {
 const json = (data: unknown, status = 200) => Response.json(data, { status });
 const err = (msg: string, status = 400) => json({ error: msg }, status);
 
+const IDEA_STATUSES = ["new", "discussing", "planned", "doing", "done", "parked", "declined"];
+const IDEA_CATEGORIES = ["Arrangementer", "Fællesskab og netværk", "Viden og research", "Kommunikation", "Politik og rettigheder", "Foreningen", "Andet"];
+const IDEA_MATURITY = ["Løs tanke", "Gennemarbejdet forslag"];
+const oneOf = (v: unknown, list: string[]) => (list.includes(String(v)) ? String(v) : null);
+
+function ideaInput(body: any) {
+  const title = String(body.title || "").trim();
+  const text = String(body.body || "").trim();
+  if (!title) return { error: "Giv din idé en kort overskrift" };
+  if (title.length > 120) return { error: "Overskriften er for lang (højst 120 tegn)" };
+  if (text.length > 4000) return { error: "Beskrivelsen er for lang (højst 4.000 tegn)" };
+  return {
+    values: [title, text || null, oneOf(body.category, IDEA_CATEGORIES), oneOf(body.maturity, IDEA_MATURITY), !!body.show_name, !!body.wants_to_help],
+  };
+}
+
 const MEMBERSHIP_TYPES = ["fuldt", "studie", "stoette"];
 const memberType = (v: unknown) => (MEMBERSHIP_TYPES.includes(String(v)) ? String(v) : null);
 
@@ -173,8 +189,10 @@ export default async (req: Request, _context: Context) => {
       }
       if (b === "export" && member) {
         const signups = await q("SELECT e.title, e.starts_at, s.created_at AS tilmeldt FROM event_signups s JOIN events e ON e.id = s.event_id WHERE s.member_id = $1", [member.id]);
+        const ideas = await q("SELECT title, body, category, maturity, show_name AS navn_vist, wants_to_help AS vil_hjaelpe, status, created_at FROM ideas WHERE member_id = $1 ORDER BY created_at", [member.id]);
+        const supported = await q("SELECT i.title, s.created_at FROM idea_supports s JOIN ideas i ON i.id = s.idea_id WHERE s.member_id = $1", [member.id]);
         const { identity_id, notes, ...pub } = member;
-        return new Response(JSON.stringify({ medlem: pub, tilmeldinger: signups, eksporteret: new Date().toISOString() }, null, 2), {
+        return new Response(JSON.stringify({ medlem: pub, tilmeldinger: signups, ideer: ideas, stoettede_ideer: supported, eksporteret: new Date().toISOString() }, null, 2), {
           headers: { "Content-Type": "application/json", "Content-Disposition": 'attachment; filename="mine-data-rca.json"' },
         });
       }
@@ -237,6 +255,49 @@ export default async (req: Request, _context: Context) => {
         return json({ ok: true });
       }
     }
+    // Idébank: kun for godkendte medlemmer
+    if (a === "ideas" && isActive) {
+      if (!b && req.method === "GET")
+        return json(await q(
+          `SELECT i.id, i.title, i.body, i.category, i.maturity, i.status, i.board_reply, i.hidden, i.created_at,
+                  i.show_name, i.wants_to_help,
+                  CASE WHEN i.show_name THEN m.name END AS author,
+                  (i.member_id = $1) AS mine,
+                  (SELECT COUNT(*)::int FROM idea_supports s WHERE s.idea_id = i.id) AS supports,
+                  EXISTS(SELECT 1 FROM idea_supports s WHERE s.idea_id = i.id AND s.member_id = $1) AS supported
+           FROM ideas i LEFT JOIN members m ON m.id = i.member_id
+           WHERE NOT i.hidden OR i.member_id = $1
+           ORDER BY i.created_at DESC`, [member.id]));
+      if (!b && req.method === "POST") {
+        const input = ideaInput(await req.json());
+        if (input.error) return err(input.error);
+        const [row] = await q("INSERT INTO ideas (member_id, title, body, category, maturity, show_name, wants_to_help) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id",
+          [member.id, ...input.values!]);
+        await audit(actor, "idea:create", String(row.id));
+        return json(row, 201);
+      }
+      if (b && !c && (req.method === "PATCH" || req.method === "DELETE")) {
+        const [own] = await q<any>("SELECT id, status FROM ideas WHERE id = $1 AND member_id = $2", [Number(b), member.id]);
+        if (!own) return err("Du kan kun ændre dine egne idéer", 403);
+        if (own.status !== "new") return err("Bestyrelsen er gået i gang med idéen, så den kan ikke længere ændres. Skriv til bestyrelsen, hvis noget skal rettes.");
+        if (req.method === "DELETE") {
+          await q("DELETE FROM ideas WHERE id = $1", [own.id]);
+          await audit(actor, "idea:delete", String(own.id));
+          return json({ ok: true });
+        }
+        const input = ideaInput(await req.json());
+        if (input.error) return err(input.error);
+        await q("UPDATE ideas SET title=$1, body=$2, category=$3, maturity=$4, show_name=$5, wants_to_help=$6, updated_at=NOW() WHERE id=$7", [...input.values!, own.id]);
+        return json({ ok: true });
+      }
+      if (b && c === "support") {
+        const [idea] = await q("SELECT id FROM ideas WHERE id = $1 AND NOT hidden", [Number(b)]);
+        if (!idea) return err("Idéen findes ikke", 404);
+        if (req.method === "POST") await q("INSERT INTO idea_supports (idea_id, member_id) VALUES ($1,$2) ON CONFLICT DO NOTHING", [Number(b), member.id]);
+        else if (req.method === "DELETE") await q("DELETE FROM idea_supports WHERE idea_id = $1 AND member_id = $2", [Number(b), member.id]);
+        return json({ ok: true });
+      }
+    }
     if (a === "articles" && isActive)
       return json(await q("SELECT * FROM articles WHERE published ORDER BY created_at DESC"));
     if (a === "documents" && isActive)
@@ -244,7 +305,7 @@ export default async (req: Request, _context: Context) => {
         folders: await q("SELECT id, name, parent_id FROM folders WHERE visibility = 'members' ORDER BY name"),
         docs: await q("SELECT id, title, category, url, body, doc_date, created_at, folder_id FROM documents WHERE visibility = 'members' ORDER BY COALESCE(doc_date, created_at::date) DESC"),
       });
-    if (["events", "articles", "documents", "hearings"].includes(a)) return err("Dit medlemskab afventer godkendelse fra bestyrelsen", 403);
+    if (["events", "articles", "documents", "hearings", "ideas"].includes(a)) return err("Dit medlemskab afventer godkendelse fra bestyrelsen", 403);
 
     // ----- board -----
     if (a === "admin") {
@@ -254,7 +315,8 @@ export default async (req: Request, _context: Context) => {
         const [counts] = await q<any>(`SELECT
           COUNT(*) FILTER (WHERE status='active')::int AS active,
           COUNT(*) FILTER (WHERE status='pending')::int AS pending,
-          COUNT(*) FILTER (WHERE status='active' AND (fee_paid_year IS NULL OR fee_paid_year < EXTRACT(YEAR FROM NOW())))::int AS unpaid
+          COUNT(*) FILTER (WHERE status='active' AND (fee_paid_year IS NULL OR fee_paid_year < EXTRACT(YEAR FROM NOW())))::int AS unpaid,
+          (SELECT COUNT(*)::int FROM ideas WHERE status = 'new') AS new_ideas
           FROM members`);
         const tasks = await q("SELECT * FROM tasks WHERE status <> 'done' ORDER BY due_date NULLS LAST LIMIT 8");
         const events = await q("SELECT e.id, e.title, e.starts_at, (SELECT COUNT(*)::int FROM event_signups s WHERE s.event_id=e.id) AS signups FROM events e WHERE starts_at > NOW() ORDER BY starts_at LIMIT 5");
@@ -345,6 +407,33 @@ export default async (req: Request, _context: Context) => {
         const csv = "\uFEFF" + [["paragraf", "medlemsnr", "navn", "email", "tidspunkt", "svar"].join(";"), ...rows.map((r) => Object.values(r).map(csvEscape).join(";"))].join("\n");
         await audit(actor, "hearing:export", `${c}: ${rows.length}`);
         return new Response(csv, { headers: { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": `attachment; filename="hoeringssvar-${c}.csv"` } });
+      }
+
+      if (b === "ideas") {
+        if (!c && req.method === "GET")
+          return json(await q(
+            `SELECT i.*, m.name AS member_name, m.email AS member_email, m.member_no,
+                    (SELECT COUNT(*)::int FROM idea_supports s WHERE s.idea_id = i.id) AS supports
+             FROM ideas i LEFT JOIN members m ON m.id = i.member_id
+             ORDER BY i.status = 'new' DESC, i.created_at DESC`));
+        if (c && req.method === "PATCH") {
+          const body = await req.json();
+          const sets: string[] = []; const vals: unknown[] = [];
+          if ("status" in body) { const s = oneOf(body.status, IDEA_STATUSES); if (!s) return err("Ukendt status"); vals.push(s); sets.push(`status = $${vals.length}`); }
+          if ("board_reply" in body) { vals.push(String(body.board_reply || "").trim().slice(0, 4000) || null); sets.push(`board_reply = $${vals.length}`); }
+          if ("hidden" in body) { vals.push(!!body.hidden); sets.push(`hidden = $${vals.length}`); }
+          if ("category" in body) { vals.push(oneOf(body.category, IDEA_CATEGORIES)); sets.push(`category = $${vals.length}`); }
+          if (!sets.length) return err("Ingen felter");
+          vals.push(Number(c));
+          const [row] = await q(`UPDATE ideas SET ${sets.join(", ")}, updated_at = NOW() WHERE id = $${vals.length} RETURNING *`, vals);
+          await audit(actor, "idea:update", `${c} ${Object.keys(body).join(",")}`);
+          return json(row || null);
+        }
+        if (c && req.method === "DELETE") {
+          await q("DELETE FROM ideas WHERE id = $1", [Number(c)]);
+          await audit(actor, "idea:delete", c);
+          return json({ ok: true });
+        }
       }
 
       if (b === "audit") return json(await q("SELECT * FROM audit_log ORDER BY created_at DESC LIMIT 200"));

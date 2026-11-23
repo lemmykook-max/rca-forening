@@ -7,7 +7,7 @@ Netlify Identity (login) og Netlify Database (Postgres).
 
 - **Offentligt:** forside, offentlige arrangementer, videnscenter, privatlivspolitik
 - **Medlemmer:** indmeldelse med samtykke, egen profil, tilmelding til arrangementer,
-  dokumenter, download af egne data og anmodning om sletning (GDPR)
+  dokumenter, høring, idébank (del og støt idéer), download af egne data og anmodning om sletning (GDPR)
 - **Bestyrelsen:** overblik, medlemsliste (godkend, kontingent, roller, CSV-eksport),
   arrangementer med tilmeldte, dokumenter/referater, opgaver, årshjul,
   videnscenter og log over ændringer

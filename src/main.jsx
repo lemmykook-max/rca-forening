@@ -4,7 +4,7 @@ import {
   getUser, login, logout, signup, handleAuthCallback, acceptInvite,
   requestPasswordRecovery, recoverPassword, onAuthChange,
 } from "@netlify/identity";
-import { api, fmtDate, download, MEMBERSHIP } from "./api.js";
+import { api, fmtDate, download, MEMBERSHIP, IDEA_CATEGORIES, IDEA_MATURITY, ideaStatus } from "./api.js";
 import Board from "./Board.jsx";
 import { Modal } from "./Modal.jsx";
 import { FolderView } from "./Folders.jsx";
@@ -61,17 +61,21 @@ function App() {
   else if (route === "arrangementer") page = <Events user={user} isActive={isActive} />;
   else if (route === "privatliv") page = <Privacy />;
   else if (route === "login") page = <Auth onDone={async () => { await loadMe(); go("medlem"); }} />;
-  else if (!user) page = <>{route === "hoering" && <div className="notice narrow" style={{ margin: "0 auto 18px" }}>Høringen er kun for medlemmer af RCA. Log ind, eller meld dig ind først.</div>}<Auth onDone={async () => { await loadMe(); }} /></>;
+  else if (!user) page = <>
+    {route === "hoering" && <div className="notice narrow" style={{ margin: "0 auto 18px" }}>Høringen er kun for medlemmer af RCA. Log ind, eller meld dig ind først.</div>}
+    {route === "idebank" && <div className="notice narrow" style={{ margin: "0 auto 18px" }}>Idébanken er for medlemmer af RCA. Log ind, eller meld dig ind først.</div>}
+    <Auth onDone={async () => { await loadMe(); }} /></>;
   else if (!member || !member.privacy_accepted_at) page = <JoinForm onDone={loadMe} email={user.email} existing={member} />;
   else if (route === "medlem") page = <MyMembership member={member} reload={loadMe} />;
   else if (route === "dokumenter") page = isActive ? <MemberDocs /> : <Pending />;
   else if (route === "hoering") page = isActive ? <Hearings /> : member.status === "ended" ? <div className="notice">Høringen er kun for nuværende medlemmer.</div> : <Pending />;
+  else if (route === "idebank") page = isActive ? <Ideas /> : member.status === "ended" ? <div className="notice">Idébanken er kun for nuværende medlemmer.</div> : <Pending />;
   else if (route.startsWith("bestyrelse")) page = isBoard ? <Board me={member} /> : <p>Kun for bestyrelsen.</p>;
   else page = <p>Siden findes ikke. <a href="#/">Til forsiden</a></p>;
 
   const nav = [
     ["", "Forside"], ["arrangementer", "Arrangementer"], ["viden", "Videnscenter"],
-    ...(isActive ? [["dokumenter", "Dokumenter"], ["hoering", "Høring"]] : []),
+    ...(isActive ? [["dokumenter", "Dokumenter"], ["hoering", "Høring"], ["idebank", "Idébank"]] : []),
     ...(user ? [["medlem", "Mit medlemskab"]] : []),
     ...(isBoard ? [["bestyrelse", "Bestyrelse"]] : []),
   ];
@@ -131,6 +135,7 @@ function Home({ user, member }) {
         <div className="card"><h3>Viden og dokumentation</h3><p className="muted">Forskning, rapporter og erfaringer samlet ét sted i videnscentret.</p><a href="#/viden">Gå til videnscentret →</a></div>
         <div className="card"><h3>Støtte og fællesskab</h3><p className="muted">Mødesteder, temaaftener og netværk for adopterede og deres nærmeste.</p><a href="#/arrangementer">Se arrangementer →</a></div>
         <div className="card"><h3>Stemme og rettigheder</h3><p className="muted">Sammen giver vi adopterede en tydelig stemme i debatten.</p><a href="https://rca-website.netlify.app/">Læs om RCA →</a></div>
+        <div className="card"><h3>Idébank</h3><p className="muted">Har du en idé til et arrangement, et emne eller noget, RCA bør gøre? Del den med de andre medlemmer.</p><a href="#/idebank">Gå til idébanken →</a></div>
       </div>
     </>
   );
@@ -230,6 +235,7 @@ function Privacy() {
       <p><b>Dataansvarlig:</b> Ressourcecenter for Adopterede (RCA){cfg.contactEmail ? `, ${cfg.contactEmail}` : ""}.</p>
       <h3>Hvilke oplysninger vi behandler</h3>
       <p>Navn, e-mail, telefon, postnummer og by, din tilknytning til adoptionsområdet (valgfrit), kontingentstatus og tilmeldinger til arrangementer. Vi beder ikke om oplysninger om din adoptionshistorie, oprindelsesland, helbred eller andre følsomme forhold.</p>
+      <p>Lægger du en idé i idébanken, gemmer vi idéen og hvem der har støttet den. De andre medlemmer ser kun dit navn, hvis du selv vælger det. Bestyrelsen kan altid se, hvem idéen kommer fra. Skriv ikke følsomme oplysninger om dig selv eller andre i idébanken.</p>
       <h3>Formål og grundlag</h3>
       <p>Vi behandler oplysningerne for at administrere dit medlemskab, opkræve kontingent, indkalde til generalforsamling og invitere til arrangementer (GDPR art. 6, stk. 1, litra b – medlemsforholdet).</p>
       <h3>Hvem ser dine oplysninger</h3>
@@ -494,6 +500,138 @@ function Hearing({ h, reload }) {
         </div>
       )}
     </div>
+  );
+}
+
+/* ---------------- idébank ---------------- */
+function Ideas() {
+  const [items, setItems] = useState(null);
+  const [err, setErr] = useState("");
+  const [edit, setEdit] = useState(null);
+  const [sort, setSort] = useState("new");
+  const [cat, setCat] = useState("");
+  const [show, setShow] = useState("open");
+  const load = () => api("ideas").then(setItems).catch((e) => setErr(e.message));
+  useEffect(() => { load(); }, []);
+
+  const toggleSupport = async (i) => {
+    setErr("");
+    try { await api(`ideas/${i.id}/support`, { method: i.supported ? "DELETE" : "POST" }); load(); } catch (e) { setErr(e.message); }
+  };
+  const remove = async (i) => {
+    if (!confirm(`Slet din idé “${i.title}”?`)) return;
+    try { await api(`ideas/${i.id}`, { method: "DELETE" }); load(); } catch (e) { setErr(e.message); }
+  };
+
+  if (!items) return <p className="muted">{err || "Indlæser …"}</p>;
+  const closed = ["done", "parked", "declined"];
+  const shown = items
+    .filter((i) => !cat || i.category === cat)
+    .filter((i) => show === "all" || (show === "mine" ? i.mine : !closed.includes(i.status)))
+    .sort((a, b) => sort === "support" ? b.supports - a.supports || new Date(b.created_at) - new Date(a.created_at) : new Date(b.created_at) - new Date(a.created_at));
+
+  return (
+    <>
+      <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+        <div style={{ maxWidth: 680 }}>
+          <h1>Idébank</h1>
+          <p className="muted">Har du en idé til RCA? Et arrangement, et emne vi bør undersøge, eller noget foreningen kan gøre bedre. Små og store idéer er lige velkomne. Støt de idéer, du synes om, så bestyrelsen kan se, hvad der betyder mest for medlemmerne.</p>
+        </div>
+        <button className="btn terra" onClick={() => setEdit({ title: "", body: "", category: "", maturity: "Løs tanke", show_name: false, wants_to_help: false })}>+ Del en idé</button>
+      </div>
+      <div className="row" style={{ margin: "8px 0 18px" }}>
+        {[["open", "Åbne idéer"], ["all", "Alle"], ["mine", "Mine idéer"]].map(([k, l]) => (
+          <button key={k} className={"btn small " + (show === k ? "" : "ghost")} onClick={() => setShow(k)}>{l}</button>
+        ))}
+        <select value={cat} onChange={(e) => setCat(e.target.value)} style={{ width: "auto" }}>
+          <option value="">Alle emner</option>
+          {IDEA_CATEGORIES.map((c) => <option key={c}>{c}</option>)}
+        </select>
+        <select value={sort} onChange={(e) => setSort(e.target.value)} style={{ width: "auto" }}>
+          <option value="new">Nyeste først</option>
+          <option value="support">Mest støttede først</option>
+        </select>
+      </div>
+      {err && <div className="error" style={{ marginBottom: 12 }}>{err}</div>}
+      {!shown.length ? (
+        <div className="card empty">{items.length ? "Ingen idéer i denne visning." : "Der er ingen idéer endnu. Vær den første til at dele en!"}</div>
+      ) : (
+        <div className="grid">
+          {shown.map((i) => {
+            const [, label, cls] = ideaStatus(i.status);
+            return (
+              <div className="card" key={i.id} style={{ display: "flex", flexDirection: "column" }}>
+                <div className="row" style={{ marginBottom: 8, gap: 6 }}>
+                  <span className={"pill " + cls}>{label}</span>
+                  {i.mine && <span className="pill board">Din idé</span>}
+                  {i.hidden && <span className="pill ended">Skjult af bestyrelsen</span>}
+                </div>
+                <h3>{i.title}</h3>
+                <p className="muted small">{[i.category, fmtDate(i.created_at), i.author || "Et medlem"].filter(Boolean).join(" · ")}</p>
+                {i.body && <p className="article-body">{i.body}</p>}
+                {i.board_reply && <div className="reply small"><b>Bestyrelsen:</b> <span className="article-body">{i.board_reply}</span></div>}
+                <div className="row" style={{ marginTop: "auto", paddingTop: 14, justifyContent: "space-between" }}>
+                  <button className={"support " + (i.supported ? "on" : "")} disabled={i.mine} onClick={() => toggleSupport(i)} title={i.mine ? "Din egen idé" : i.supported ? "Fjern din støtte" : "Støt idéen"}>
+                    {i.supported ? "♥" : "♡"} {i.supports} støtter
+                  </button>
+                  {i.mine && i.status === "new" && (
+                    <span className="row" style={{ gap: 6 }}>
+                      <button className="btn small ghost" onClick={() => setEdit(i)}>Redigér</button>
+                      <button className="btn small danger" onClick={() => remove(i)}>Slet</button>
+                    </span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {edit && (
+        <Modal onClose={() => setEdit(null)}>
+          <h2>{edit.id ? "Redigér din idé" : "Del en idé"}</h2>
+          <IdeaForm idea={edit} onSaved={() => { setEdit(null); load(); }} />
+        </Modal>
+      )}
+    </>
+  );
+}
+
+function IdeaForm({ idea, onSaved }) {
+  const [f, setF] = useState(() => ({ title: idea.title || "", body: idea.body || "", category: idea.category || "", maturity: idea.maturity || "Løs tanke", show_name: !!idea.show_name, wants_to_help: !!idea.wants_to_help }));
+  const [err, setErr] = useState(""); const [busy, setBusy] = useState(false);
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value });
+  const submit = async (e) => {
+    e.preventDefault(); setErr(""); setBusy(true);
+    try {
+      if (idea.id) await api(`ideas/${idea.id}`, { method: "PATCH", body: f });
+      else await api("ideas", { method: "POST", body: f });
+      onSaved();
+    } catch (e2) { setErr(e2.message); }
+    setBusy(false);
+  };
+  return (
+    <form className="stack" onSubmit={submit}>
+      <label>Overskrift<input required maxLength={120} value={f.title} onChange={set("title")} placeholder="Fx Temaaften om at søge sin baggrund" /></label>
+      <label>Beskriv idéen<textarea maxLength={4000} value={f.body} onChange={set("body")} placeholder="Hvad går idéen ud på, og hvorfor er den vigtig for dig?" style={{ minHeight: 140 }} /></label>
+      <div className="form-grid">
+        <label>Emne
+          <select value={f.category} onChange={set("category")}>
+            <option value="">Vælg …</option>
+            {IDEA_CATEGORIES.map((c) => <option key={c}>{c}</option>)}
+          </select>
+        </label>
+        <label>Hvor langt er idéen?
+          <select value={f.maturity} onChange={set("maturity")}>
+            {IDEA_MATURITY.map((m) => <option key={m}>{m}</option>)}
+          </select>
+        </label>
+      </div>
+      <label className="check"><input type="checkbox" checked={f.wants_to_help} onChange={set("wants_to_help")} />Jeg vil gerne selv være med til at føre idéen ud i livet</label>
+      <label className="check"><input type="checkbox" checked={f.show_name} onChange={set("show_name")} />Vis mit navn ved idéen for de andre medlemmer</label>
+      <p className="muted small">Bestyrelsen kan altid se, hvem idéen kommer fra. Skriv ikke følsomme oplysninger om dig selv eller andre. Du kan rette eller slette idéen, indtil bestyrelsen er gået i gang med den.</p>
+      {err && <div className="error">{err}</div>}
+      <div><button className="btn" disabled={busy}>{idea.id ? "Gem ændringer" : "Del idéen"}</button></div>
+    </form>
   );
 }
 
