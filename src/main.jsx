@@ -106,7 +106,7 @@ function App() {
       <footer>
         <div className="wrap row" style={{ justifyContent: "space-between" }}>
           <span>Ressourcecenter for Adopterede (RCA) · Stiftet 15. november 2026</span>
-          <span className="row"><a href="#/privatliv">Privatlivspolitik</a><a href="https://rca-website.netlify.app/">Hjemmeside</a></span>
+          <span className="row"><a href="#/privatliv">Privatlivspolitik</a><a href="https://rcfa.dk/">Hjemmeside</a></span>
         </div>
       </footer>
     </>
@@ -134,7 +134,7 @@ function Home({ user, member }) {
       <div className="grid section">
         <div className="card"><h3>Viden og dokumentation</h3><p className="muted">Forskning, rapporter og erfaringer samlet ét sted i videnscentret.</p><a href="#/viden">Gå til videnscentret →</a></div>
         <div className="card"><h3>Støtte og fællesskab</h3><p className="muted">Mødesteder, temaaftener og netværk for adopterede og deres nærmeste.</p><a href="#/arrangementer">Se arrangementer →</a></div>
-        <div className="card"><h3>Stemme og rettigheder</h3><p className="muted">Sammen giver vi adopterede en tydelig stemme i debatten.</p><a href="https://rca-website.netlify.app/">Læs om RCA →</a></div>
+        <div className="card"><h3>Stemme og rettigheder</h3><p className="muted">Sammen giver vi adopterede en tydelig stemme i debatten.</p><a href="https://rcfa.dk/">Læs om RCA →</a></div>
         <div className="card"><h3>Idébank</h3><p className="muted">Har du en idé til et arrangement, et emne eller noget, RCA bør gøre? Del den med de andre medlemmer.</p><a href="#/idebank">Gå til idébanken →</a></div>
       </div>
     </>

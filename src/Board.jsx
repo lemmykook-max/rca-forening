@@ -259,7 +259,7 @@ const TASKS = {
 };
 const HEARINGS = {
   resource: "hearings", title: "Høringer", newLabel: "Ny høring",
-  intro: "Kun godkendte medlemmer kan svare. Link til høringen: rca-forening.netlify.app/#/hoering",
+  intro: "Kun godkendte medlemmer kan svare. Link til høringen: medlem.rcfa.dk/#/hoering",
   fields: [
     { k: "title", l: "Titel", req: true }, { k: "deadline", l: "Høringsfrist (sidste dag)", type: "date", req: true },
     { k: "status", l: "Status", type: "select", opts: [["open", "Åben (lukker automatisk efter fristen)"], ["closed", "Lukket"], ["hidden", "Skjult for medlemmer"]], def: "open" },
@@ -484,7 +484,7 @@ function BoardIdeas() {
   return (
     <>
       <div className="row" style={{ justifyContent: "space-between", marginBottom: 14 }}>
-        <p className="muted" style={{ margin: 0, maxWidth: 640 }}>Medlemmernes idéer. Sæt status og skriv et kort svar, som medlemmerne kan se. Link til idébanken: rca-forening.netlify.app/#/idebank</p>
+        <p className="muted" style={{ margin: 0, maxWidth: 640 }}>Medlemmernes idéer. Sæt status og skriv et kort svar, som medlemmerne kan se. Link til idébanken: medlem.rcfa.dk/#/idebank</p>
         <div className="row">
           {[["aktive", "Åbne"], ["nye", "Nye"], ["alle", "Alle"]].map(([k, l]) => (
             <button key={k} className={"btn small " + (filter === k ? "" : "ghost")} onClick={() => setFilter(k)}>{l}</button>

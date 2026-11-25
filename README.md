@@ -14,7 +14,7 @@ Netlify Identity (login) og Netlify Database (Postgres).
 
 ## Deploy
 
-Netlify-projektet **rca-forening** (https://rca-forening.netlify.app) er koblet til
+Netlify-projektet **rca-forening** (https://medlem.rcfa.dk) er koblet til
 dette GitHub-repo. Hvert push til `main` bygges og udrulles automatisk.
 Databasen oprettes ved første deploy, og tabellerne laves ud fra
 `netlify/database/migrations/` (ændr aldrig en migration, der er kørt – lav en ny).
