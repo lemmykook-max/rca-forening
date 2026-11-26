@@ -16,7 +16,67 @@ async function q<T = any>(text: string, params: unknown[] = []): Promise<T[]> {
 const json = (data: unknown, status = 200) => Response.json(data, { status });
 const err = (msg: string, status = 400) => json({ error: msg }, status);
 
-const IDEA_STATUSES = ["new", "discussing", "planned", "doing", "done", "parked", "declined"];
+// ----- mail (Simply SMTP) -----
+const SITE = "https://medlem.rcfa.dk";
+const esc = (s: unknown) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
+let _mailer: any;
+async function sendMail(to: string, subject: string, paragraphs: string[]) {
+  const pass = process.env.SMTP_PASS;
+  if (!pass || !to) { console.log(`mail ikke sendt (${pass ? "ingen modtager" : "SMTP_PASS mangler"}): ${subject}`); return false; }
+  try {
+    if (!_mailer) {
+      const nodemailer = (await import("nodemailer")).default;
+      _mailer = nodemailer.createTransport({
+        host: process.env.SMTP_HOST || "smtp.simply.com",
+        port: Number(process.env.SMTP_PORT || 587),
+        secure: false, requireTLS: true,
+        auth: { user: process.env.SMTP_USER || "chair@rcfa.dk", pass },
+      });
+    }
+    const text = paragraphs.join("\n\n") + "\n\n--\nRessourcecenter for Adopterede (RCA)\nrcfa.dk · bestyrelse@rcfa.dk";
+    const html = `<div style="font-family:Arial,Helvetica,sans-serif;color:#17424d;font-size:15px;line-height:1.55;max-width:560px">
+      ${paragraphs.map((p) => `<p style="margin:0 0 14px">${esc(p).replace(/\n/g, "<br>").replace(/(https:\/\/[^\s<]+)/g, '<a href="$1" style="color:#b8603f">$1</a>')}</p>`).join("")}
+      <p style="margin:24px 0 0;padding-top:12px;border-top:2px solid #b8603f;font-size:13px;color:#2e6b73"><b style="font-family:Georgia,serif;color:#17424d">Ressourcecenter for Adopterede (RCA)</b><br><a href="https://rcfa.dk" style="color:#b8603f">rcfa.dk</a> · bestyrelse@rcfa.dk</p></div>`;
+    await _mailer.sendMail({
+      from: process.env.MAIL_FROM || '"Ressourcecenter for Adopterede" <chair@rcfa.dk>',
+      replyTo: process.env.CONTACT_EMAIL || "bestyrelse@rcfa.dk",
+      to, subject, text, html,
+    });
+    return true;
+  } catch (e) {
+    console.error("mail fejlede:", subject, e);
+    return false;
+  }
+}
+const firstName = (n: string) => String(n || "").trim().split(/\s+/)[0] || "";
+const memberNo = (n: unknown) => (n ? `RCA-${String(n).padStart(4, "0")}` : "");
+
+async function mailReceipt(m: any) {
+  await sendMail(m.email, "Tak for din indmeldelse i RCA", [
+    `Hej ${firstName(m.name)}`,
+    "Tak, fordi du vil være medlem af Ressourcecenter for Adopterede. Vi har modtaget din indmeldelse.",
+    "Bestyrelsen godkender nye medlemmer løbende, typisk inden for et par dage. Du får en mail med dit medlemsnummer, så snart du er godkendt.",
+    `Du kan altid se din indmeldelse på ${SITE}`,
+    "Har du spørgsmål, så svar bare på denne mail.",
+    "Venlig hilsen\nBestyrelsen i RCA",
+  ]);
+  await sendMail(process.env.CONTACT_EMAIL || "bestyrelse@rcfa.dk", `Ny indmeldelse: ${m.name}`, [
+    `${m.name} (${m.email}) har meldt sig ind og venter på godkendelse.`,
+    `Godkend i bestyrelsesrummet: ${SITE}/#/bestyrelse`,
+  ]);
+}
+async function mailWelcome(m: any) {
+  return sendMail(m.email, "Velkommen i RCA", [
+    `Hej ${firstName(m.name)}`,
+    "Velkommen som medlem af Ressourcecenter for Adopterede! Dit medlemskab er nu godkendt.",
+    `Dit medlemsnummer er ${memberNo(m.member_no)}. Brug det, når du tilmelder dig generalforsamlinger og afstemninger.`,
+    `På ${SITE} kan du tilmelde dig arrangementer, finde viden og dokumenter, svare på høringer og dele idéer i idébanken.`,
+    "Har du lyst til at give en hånd med, eller har du spørgsmål, så svar bare på denne mail. Vi glæder os til at have dig med.",
+    "Venlig hilsen\nBestyrelsen i RCA",
+  ]);
+}
+
+const IDEA_STATUSES =["new", "discussing", "planned", "doing", "done", "parked", "declined"];
 const IDEA_CATEGORIES = ["Arrangementer", "Fællesskab og netværk", "Viden og research", "Kommunikation", "Politik og rettigheder", "Foreningen", "Andet"];
 const IDEA_MATURITY = ["Løs tanke", "Gennemarbejdet forslag"];
 const oneOf = (v: unknown, list: string[]) => (list.includes(String(v)) ? String(v) : null);
@@ -184,6 +244,7 @@ export default async (req: Request, _context: Context) => {
             [user.id, actor.toLowerCase(), ...fields, isBoard ? "board" : "member", isBoard ? "active" : "pending"],
           );
           await audit(actor, "member:signup", "");
+          if (row.status === "pending") await mailReceipt(row);
         }
         return json(row);
       }
@@ -365,6 +426,7 @@ export default async (req: Request, _context: Context) => {
           const cols = allowed.filter((k) => k in body);
           if (Number(c) === member.id && "role" in body && body.role !== "board") return err("Du kan ikke fjerne din egen bestyrelsesrolle");
           if (!cols.length) return err("Ingen felter");
+          const [before] = await q<any>("SELECT status FROM members WHERE id = $1", [Number(c)]);
           let [row] = await q<any>(`UPDATE members SET ${cols.map((k, i) => `${k}=$${i + 1}`).join(", ")}, updated_at=NOW() WHERE id=$${cols.length + 1} RETURNING *`, [...cols.map((k) => clean(body[k])), Number(c)]);
           // Hold medlemsperioden ved lige, når status ændres
           if (row && "status" in body)
@@ -374,6 +436,10 @@ export default async (req: Request, _context: Context) => {
                  ended_at = CASE WHEN status = 'ended' THEN COALESCE(ended_at, NOW()) WHEN status = 'active' THEN NULL ELSE ended_at END
                WHERE id = $1 RETURNING *`, [row.id]);
           await audit(actor, "member:update", `${c} ${cols.join(",")}`);
+          if (row && before?.status === "pending" && row.status === "active") {
+            const sent = await mailWelcome(row);
+            await audit(actor, "member:welcome-mail", `${row.id} ${sent ? "sendt" : "ikke sendt"}`);
+          }
           return json(row);
         }
         if (c && req.method === "DELETE") {
